@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import sqlite3
 from datetime import datetime
 import yfinance as yf
@@ -63,6 +62,21 @@ def save_capital(date, member, type_val, amount, notes):
     conn.commit()
     conn.close()
 
+def update_capital(tx_id, date, member, type_val, amount, notes):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE capital_ledger SET date=?, member=?, type=?, amount=?, notes=? WHERE id=?",
+              (date, member, type_val, amount, notes, tx_id))
+    conn.commit()
+    conn.close()
+
+def delete_capital(tx_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM capital_ledger WHERE id=?", (tx_id,))
+    conn.commit()
+    conn.close()
+
 def load_tx():
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM pool_transactions ORDER BY date DESC", conn)
@@ -76,6 +90,24 @@ def save_tx(date, asset_type, platform, symbol, name, tx_type, price, quantity, 
         INSERT INTO pool_transactions (date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes))
+    conn.commit()
+    conn.close()
+
+def update_tx(tx_id, date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE pool_transactions 
+        SET date=?, asset_type=?, platform=?, symbol=?, name=?, tx_type=?, price=?, quantity=?, total_amount=?, notes=?
+        WHERE id=?
+    ''', (date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes, tx_id))
+    conn.commit()
+    conn.close()
+
+def delete_tx(tx_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM pool_transactions WHERE id=?", (tx_id,))
     conn.commit()
     conn.close()
 
@@ -138,14 +170,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 色彩库：马卡龙柔和系列
-COLORS_MEMBERS = ['#FF85A1', '#4EA8DE']  # 娇嫩粉 & 天空蓝
-COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA'] # 马卡龙彩虹
-COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A'] # 活力糖果
+COLORS_MEMBERS = ['#FF85A1', '#4EA8DE']
+COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
+COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
 
 # -----------------------------------------------------------------------------
-# 3. 核心数据汇总
+# 3. 核心数据汇总与逻辑计算
 # -----------------------------------------------------------------------------
-menu = st.sidebar.radio("✨ 导航菜单", ["🍰 共享资金池总览", "💵 资金存入/取出", "📈 买卖标的记账"])
+menu = st.sidebar.radio("✨ 导航菜单", ["🍰 共享资金池总览", "💵 资金存入/取出", "📈 买卖标的记账", "📜 交易明细与记录"])
 
 df_cap = load_capital()
 df_tx = load_tx()
@@ -200,7 +232,7 @@ cash_balance = total_capital - cash_spent
 total_net_worth = cash_balance + total_assets_mv
 total_profit = total_net_worth - total_capital
 
-# 情侣权益表 (仅保留：成员、累计投入本金、资金池占比、当前权益市值)
+# 情侣权益表
 equity_data = []
 for m in ['👦 男方', '👧 女方']:
     cap = capital_summary[m]
@@ -220,7 +252,6 @@ df_equity = pd.DataFrame(equity_data)
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
-    # 顶部 4 个可爱 KPI 卡片
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
@@ -233,7 +264,6 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 情侣出资比重 (删除了个人收益率，极简表格 + 可爱粉蓝饼图)
     col_e1, col_e2 = st.columns([3, 2])
     with col_e1:
         st.subheader("👩‍❤️‍👨 两人出资与权益份额")
@@ -250,10 +280,7 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 可视化图表区 (三个图表完全不同颜色 & 3D 环形感)
     st.subheader("🎨 资产配置与分布可视化")
-    
-    # 构造全盘资产列表 (含现金)
     all_assets = [{'type': '货币基金/现金', 'mv': cash_balance, 'plat': '资金池现金'}]
     if not df_portfolio.empty:
         for _, r in df_portfolio.iterrows():
@@ -279,7 +306,6 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 精简版“持仓标的”卡片视图 (去除了大片密密麻麻的表格文字，用可视化卡片呈现)
     st.subheader("📦 当前投资标的概览")
     if df_portfolio.empty:
         st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
@@ -300,7 +326,6 @@ if menu == "🍰 共享资金池总览":
                 </div>
                 """, unsafe_allow_html=True)
 
-        # 非公开 API 校准折叠框
         with st.expander("⚙️ 手动更新净值/单价 (如 TNG 黄金 / MooMoo 货币基金)"):
             m_col1, m_col2, m_col3 = st.columns(3)
             selected_key = m_col1.selectbox("选择标的", df_portfolio['key'].tolist())
@@ -313,7 +338,6 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # ⚖️ 极简永久投资组合调仓
     st.subheader("⚖️ 智能调仓建议 (永久投资组合 25%)")
     perm_map = {"股票/ETF": "股票", "黄金/贵金属": "黄金", "货币基金/现金": "现金", "加密货币": "股票", "其他": "现金"}
     df_all['category'] = df_all['type'].map(perm_map)
@@ -382,3 +406,99 @@ elif menu == "📈 买卖标的记账":
                 save_tx(date_val.strftime("%Y-%m-%d"), asset_type, platform, symbol.upper().strip(), name.strip(), tx_type, price, quantity, tot, notes)
                 st.success("记账成功！")
                 st.rerun()
+
+# -----------------------------------------------------------------------------
+# 7. 页面 4: 📜 交易明细与记录 (可编辑 / 可删除 / 实时同步数据)
+# -----------------------------------------------------------------------------
+elif menu == "📜 交易明细与记录":
+    st.title("📜 交易明细与历史日志")
+    st.markdown("在此处可以查看所有历史记账，进行**修改编辑**或**直接删除**，修改后所有图表和资产数据均会自动同步刷新。")
+
+    tab_cap, tab_tx = st.tabs(["💵 本金存取明细 Log", "📈 标的交易明细 Log"])
+
+    # --- TAB 1: 本金存取 Log ---
+    with tab_cap:
+        if df_cap.empty:
+            st.info("尚无本金存取记录")
+        else:
+            st.dataframe(df_cap[['id', 'date', 'member', 'type', 'amount', 'notes']], use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.subheader("🛠️ 编辑 / 删除资金记录")
+            
+            cap_id_list = df_cap['id'].tolist()
+            selected_cap_id = st.selectbox("选择要编辑/删除的资金记录 ID", cap_id_list, key="sel_cap")
+            row_cap = df_cap[df_cap['id'] == selected_cap_id].iloc[0]
+
+            with st.form("edit_cap_form"):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    e_member = st.selectbox("出资人", ["👦 男方", "👧 女方"], index=0 if row_cap['member']=="👦 男方" else 1)
+                    e_type = st.selectbox("类型", ["注资/存入本金", "撤资/提取本金"], index=0 if "存入" in row_cap['type'] else 1)
+                with ec2:
+                    e_date = st.date_input("日期", datetime.strptime(row_cap['date'], "%Y-%m-%d"))
+                    e_amount = st.number_input("金额 ($)", min_value=1.0, value=float(row_cap['amount']))
+                e_notes = st.text_input("备注", value=str(row_cap['notes'] or ''))
+
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    btn_update_cap = st.form_submit_button("✏️ 保存修改", use_container_width=True)
+                with col_btn2:
+                    btn_del_cap = st.form_submit_button("🗑️ 删除此笔记录", use_container_width=True)
+
+                if btn_update_cap:
+                    update_capital(selected_cap_id, e_date.strftime("%Y-%m-%d"), e_member, e_type, e_amount, e_notes)
+                    st.success("已更新资金记录并刷新数据！")
+                    st.rerun()
+
+                if btn_del_cap:
+                    delete_capital(selected_cap_id)
+                    st.success("记录已成功删除并重新计算面板！")
+                    st.rerun()
+
+    # --- TAB 2: 标的交易 Log ---
+    with tab_tx:
+        if df_tx.empty:
+            st.info("尚无标的交易记录")
+        else:
+            st.dataframe(df_tx[['id', 'date', 'asset_type', 'platform', 'symbol', 'name', 'tx_type', 'price', 'quantity', 'total_amount', 'notes']], use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.subheader("🛠️ 编辑 / 删除标的交易记录")
+
+            tx_id_list = df_tx['id'].tolist()
+            selected_tx_id = st.selectbox("选择要编辑/删除的交易 ID", tx_id_list, key="sel_tx")
+            row_tx = df_tx[df_tx['id'] == selected_tx_id].iloc[0]
+
+            with st.form("edit_tx_form"):
+                et1, et2, et3 = st.columns(3)
+                asset_options = ["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"]
+                with et1:
+                    e_asset_type = st.selectbox("资产类型", asset_options, index=asset_options.index(row_tx['asset_type']) if row_tx['asset_type'] in asset_options else 0)
+                    e_tx_type = st.selectbox("交易类型", ["买入", "卖出"], index=0 if row_tx['tx_type']=="买入" else 1)
+                    e_tx_date = st.date_input("日期", datetime.strptime(row_tx['date'], "%Y-%m-%d"))
+                with et2:
+                    e_platform = st.text_input("投资平台", value=str(row_tx['platform']))
+                    e_name = st.text_input("标的名称", value=str(row_tx['name']))
+                    e_symbol = st.text_input("代码 (选填)", value=str(row_tx['symbol'] or ''))
+                with et3:
+                    e_price = st.number_input("单价", min_value=0.0001, value=float(row_tx['price']), format="%.4f")
+                    e_quantity = st.number_input("数量 / 份额", min_value=0.0001, value=float(row_tx['quantity']), format="%.4f")
+                    e_tx_notes = st.text_input("备注", value=str(row_tx['notes'] or ''))
+
+                e_tot = e_price * e_quantity
+                st.markdown(f"**💰 计算总额: ${e_tot:,.2f}**")
+
+                col_tx_btn1, col_tx_btn2 = st.columns(2)
+                with col_tx_btn1:
+                    btn_update_tx = st.form_submit_button("✏️ 保存修改", use_container_width=True)
+                with col_tx_btn2:
+                    btn_del_tx = st.form_submit_button("🗑️ 删除此笔记录", use_container_width=True)
+
+                if btn_update_tx:
+                    update_tx(selected_tx_id, e_tx_date.strftime("%Y-%m-%d"), e_asset_type, e_platform, e_symbol.upper().strip(), e_name.strip(), e_tx_type, e_price, e_quantity, e_tot, e_tx_notes)
+                    st.success("修改已保存并重新联动更新看板！")
+                    st.rerun()
+
+                if btn_del_tx:
+                    delete_tx(selected_tx_id)
+                    st.success("已成功删除记录并实时刷新所有数据！")
+                    st.rerun()
