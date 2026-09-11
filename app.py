@@ -140,7 +140,7 @@ def fetch_price(symbol, asset_type, default_price):
     return default_price
 
 # -----------------------------------------------------------------------------
-# 2. 可爱风 UI 主题配置
+# 2. UI 主题配置
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
@@ -159,17 +159,10 @@ st.markdown("""
     }
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
-    .asset-chip {
-        background: #fff0f3;
-        border-radius: 12px;
-        padding: 12px;
-        border-left: 5px solid #ff758f;
-        margin-bottom: 8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-COLORS_MEMBERS = ['#FF85A1', '#4EA8DE']
+# 资产分类与平台饼图配色
 COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
 COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
 
@@ -256,7 +249,7 @@ df_equity = pd.DataFrame(equity_data)
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
-    # 顶部 4 个 KPI 卡片 (绿色代表盈利，红色代表亏损)
+    # 顶部 4 个 KPI 卡片
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
@@ -284,10 +277,14 @@ if menu == "🍰 共享资金池总览":
         st.subheader("👩‍❤️‍👨 两人出资与权益份额")
         st.dataframe(df_equity, use_container_width=True, hide_index=True)
     with col_e2:
+        # 男方蓝色，女方粉色
+        color_map_members = {'👦 男方': '#4EA8DE', '👧 女方': '#FF85A1'}
         fig_mem = px.pie(
             df_equity, values=[capital_summary['👦 男方'], capital_summary['👧 女方']], 
             names=['👦 男方', '👧 女方'], hole=0.55,
-            color_discrete_sequence=COLORS_MEMBERS, title="💕 本金出资比例"
+            color='成员',
+            color_discrete_map=color_map_members,
+            title="💕 本金出资比例"
         )
         fig_mem.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#ffffff', width=3)))
         fig_mem.update_layout(showlegend=False, margin=dict(t=30, b=0, l=0, r=0))
@@ -321,7 +318,7 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 持仓标的概览 (绿涨红跌 + 正确的符号与百分比)
+    # 持仓标的概览 (色卡颜色与百分比完全根据盈亏变动)
     st.subheader("📦 当前投资标的概览")
     if df_portfolio.empty:
         st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
@@ -329,15 +326,23 @@ if menu == "🍰 共享资金池总览":
         c_list = st.columns(3)
         for idx, r in df_portfolio.iterrows():
             with c_list[idx % 3]:
-                item_profit_color = "#2a9d8f" if r['profit'] >= 0 else "#e76f51"  # 绿涨红跌
+                is_profitable = r['profit'] >= 0
+                item_profit_color = "#2a9d8f" if is_profitable else "#e76f51"  # 绿涨红跌
+                
+                # 实时根据盈亏切换色卡背景和边框颜色
+                card_bg = "#e8f5e9" if is_profitable else "#fff0f3"
+                card_border = "#2a9d8f" if is_profitable else "#ff758f"
+                
                 asset_pct = (r['mv'] / total_net_worth * 100) if total_net_worth > 0 else 0.0
-                item_pct_str = f"+{r['profit_pct']:.2f}%" if r['profit'] >= 0 else f"{r['profit_pct']:.2f}%"
+                asset_pct_str = f"+{asset_pct:.1f}%" if asset_pct >= 0 else f"{asset_pct:.1f}%"
+                
+                item_pct_str = f"+{r['profit_pct']:.2f}%" if is_profitable else f"{r['profit_pct']:.2f}%"
 
                 st.markdown(f"""
-                <div class="asset-chip">
+                <div style="background:{card_bg}; border-radius:12px; padding:12px; border-left:5px solid {card_border}; margin-bottom:8px;">
                     <div style="display:flex; justify-content:space-between; font-weight:700;">
                         <span>{r['name']} ({r['plat']})</span>
-                        <span>${r['mv']:,.2f} <span style="font-size:12px; font-weight:normal; color:#666;">({asset_pct:.1f}%)</span></span>
+                        <span>${r['mv']:,.2f} <span style="font-size:12px; font-weight:600; color:{item_profit_color};">({asset_pct_str})</span></span>
                     </div>
                     <div style="font-size:12px; color:#666; margin-top:4px;">
                         数量: {r['qty']:.2f} | 现价: ${r['price']:.2f} | 盈亏: <b style="color:{item_profit_color};">${r['profit']:,.2f} ({item_pct_str})</b>
@@ -427,7 +432,7 @@ elif menu == "📈 买卖标的记账":
                 st.rerun()
 
 # -----------------------------------------------------------------------------
-# 7. 页面 4: 📜 交易明细与记录 (可编辑 / 可删除 / 实时同步数据)
+# 7. 页面 4: 📜 交易明细与记录
 # -----------------------------------------------------------------------------
 elif menu == "📜 交易明细与记录":
     st.title("📜 交易明细与历史日志")
