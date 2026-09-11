@@ -169,7 +169,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 色彩库：马卡龙柔和系列
 COLORS_MEMBERS = ['#FF85A1', '#4EA8DE']
 COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
 COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
@@ -232,6 +231,9 @@ cash_balance = total_capital - cash_spent
 total_net_worth = cash_balance + total_assets_mv
 total_profit = total_net_worth - total_capital
 
+# 计算总体累计盈亏百分比
+profit_pct = (total_profit / total_capital * 100) if total_capital > 0 else 0.0
+
 # 情侣权益表
 equity_data = []
 for m in ['👦 男方', '👧 女方']:
@@ -252,6 +254,7 @@ df_equity = pd.DataFrame(equity_data)
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
+    # 顶部 4 个 KPI 卡片 (累计盈亏增加百分比)
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
@@ -260,7 +263,16 @@ if menu == "🍰 共享资金池总览":
     with k3:
         st.markdown(f'<div class="cute-card"><div class="cute-title">📈 标的总市值</div><div class="cute-value" style="color:#e76f51;">${total_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
     with k4:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">✨ 累计盈亏</div><div class="cute-value" style="color:{"#ff5c8a" if total_profit>=0 else "#2b2d42"};">${total_profit:,.2f}</div></div>', unsafe_allow_html=True)
+        profit_color = "#ff5c8a" if total_profit >= 0 else "#2b2d42"
+        profit_sign = "+" if total_profit >= 0 else ""
+        st.markdown(f'''
+            <div class="cute-card">
+                <div class="cute-title">✨ 累计盈亏</div>
+                <div class="cute-value" style="color:{profit_color};">
+                    ${total_profit:,.2f} <span style="font-size:14px; font-weight:600;">({profit_sign}{profit_pct:.2f}%)</span>
+                </div>
+            </div>
+        ''', unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -306,6 +318,7 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
+    # 持仓标的概览 (右上角数值增加百分比占比)
     st.subheader("📦 当前投资标的概览")
     if df_portfolio.empty:
         st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
@@ -314,11 +327,12 @@ if menu == "🍰 共享资金池总览":
         for idx, r in df_portfolio.iterrows():
             with c_list[idx % 3]:
                 profit_color = "#ff5c8a" if r['profit'] >= 0 else "#2a9d8f"
+                asset_pct = (r['mv'] / total_net_worth * 100) if total_net_worth > 0 else 0.0
                 st.markdown(f"""
                 <div class="asset-chip">
                     <div style="display:flex; justify-content:space-between; font-weight:700;">
                         <span>{r['name']} ({r['plat']})</span>
-                        <span style="color:{profit_color};">${r['mv']:,.2f}</span>
+                        <span style="color:{profit_color};">${r['mv']:,.2f} <span style="font-size:12px; font-weight:normal; color:#666;">({asset_pct:.1f}%)</span></span>
                     </div>
                     <div style="font-size:12px; color:#666; margin-top:4px;">
                         数量: {r['qty']:.2f} | 现价: ${r['price']:.2f} | 盈亏: <b style="color:{profit_color};">${r['profit']:,.2f}</b>
@@ -416,7 +430,6 @@ elif menu == "📜 交易明细与记录":
 
     tab_cap, tab_tx = st.tabs(["💵 本金存取明细 Log", "📈 标的交易明细 Log"])
 
-    # --- TAB 1: 本金存取 Log ---
     with tab_cap:
         if df_cap.empty:
             st.info("尚无本金存取记录")
@@ -455,7 +468,6 @@ elif menu == "📜 交易明细与记录":
                     st.success("记录已成功删除并重新计算面板！")
                     st.rerun()
 
-    # --- TAB 2: 标的交易 Log ---
     with tab_tx:
         if df_tx.empty:
             st.info("尚无标的交易记录")
