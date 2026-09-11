@@ -221,9 +221,11 @@ for k, item in holdings.items():
         cp = fetch_price(item['symbol'], item['type'], lp)
         mv = cp * item['qty']
         total_assets_mv += mv
+        profit = mv - item['cost']
+        profit_pct = (profit / item['cost'] * 100) if item['cost'] > 0 else 0.0
         portfolio.append({
             'key': k, 'name': item['name'], 'type': item['type'], 'plat': item['plat'],
-            'qty': item['qty'], 'price': cp, 'cost': item['cost'], 'mv': mv, 'profit': mv - item['cost']
+            'qty': item['qty'], 'price': cp, 'cost': item['cost'], 'mv': mv, 'profit': profit, 'profit_pct': profit_pct
         })
 
 df_portfolio = pd.DataFrame(portfolio)
@@ -254,7 +256,7 @@ df_equity = pd.DataFrame(equity_data)
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
-    # 顶部 4 个 KPI 卡片 (累计盈亏增加百分比)
+    # 顶部 4 个 KPI 卡片 (绿色代表盈利，红色代表亏损)
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
@@ -263,13 +265,14 @@ if menu == "🍰 共享资金池总览":
     with k3:
         st.markdown(f'<div class="cute-card"><div class="cute-title">📈 标的总市值</div><div class="cute-value" style="color:#e76f51;">${total_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
     with k4:
-        profit_color = "#ff5c8a" if total_profit >= 0 else "#2b2d42"
-        profit_sign = "+" if total_profit >= 0 else ""
+        profit_color = "#2a9d8f" if total_profit >= 0 else "#e76f51"  # 绿色代表赢，红色代表亏
+        pct_str = f"+{profit_pct:.2f}%" if total_profit >= 0 else f"{profit_pct:.2f}%"
+        
         st.markdown(f'''
             <div class="cute-card">
                 <div class="cute-title">✨ 累计盈亏</div>
                 <div class="cute-value" style="color:{profit_color};">
-                    ${total_profit:,.2f} <span style="font-size:14px; font-weight:600;">({profit_sign}{profit_pct:.2f}%)</span>
+                    ${total_profit:,.2f} <span style="font-size:14px; font-weight:600;">({pct_str})</span>
                 </div>
             </div>
         ''', unsafe_allow_html=True)
@@ -318,7 +321,7 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 持仓标的概览 (右上角数值增加百分比占比)
+    # 持仓标的概览 (绿涨红跌 + 正确的符号与百分比)
     st.subheader("📦 当前投资标的概览")
     if df_portfolio.empty:
         st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
@@ -326,16 +329,18 @@ if menu == "🍰 共享资金池总览":
         c_list = st.columns(3)
         for idx, r in df_portfolio.iterrows():
             with c_list[idx % 3]:
-                profit_color = "#ff5c8a" if r['profit'] >= 0 else "#2a9d8f"
+                item_profit_color = "#2a9d8f" if r['profit'] >= 0 else "#e76f51"  # 绿涨红跌
                 asset_pct = (r['mv'] / total_net_worth * 100) if total_net_worth > 0 else 0.0
+                item_pct_str = f"+{r['profit_pct']:.2f}%" if r['profit'] >= 0 else f"{r['profit_pct']:.2f}%"
+
                 st.markdown(f"""
                 <div class="asset-chip">
                     <div style="display:flex; justify-content:space-between; font-weight:700;">
                         <span>{r['name']} ({r['plat']})</span>
-                        <span style="color:{profit_color};">${r['mv']:,.2f} <span style="font-size:12px; font-weight:normal; color:#666;">({asset_pct:.1f}%)</span></span>
+                        <span>${r['mv']:,.2f} <span style="font-size:12px; font-weight:normal; color:#666;">({asset_pct:.1f}%)</span></span>
                     </div>
                     <div style="font-size:12px; color:#666; margin-top:4px;">
-                        数量: {r['qty']:.2f} | 现价: ${r['price']:.2f} | 盈亏: <b style="color:{profit_color};">${r['profit']:,.2f}</b>
+                        数量: {r['qty']:.2f} | 现价: ${r['price']:.2f} | 盈亏: <b style="color:{item_profit_color};">${r['profit']:,.2f} ({item_pct_str})</b>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
