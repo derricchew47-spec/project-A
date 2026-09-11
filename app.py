@@ -1,511 +1,407 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
 import sqlite3
-import numpy as np
 from datetime import datetime
+import yfinance as yf
 
 # -----------------------------------------------------------------------------
-# 1. 页面配置与 CSS 样式注入
+# 1. 数据库初始化与核心函数
 # -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Our Capital | 情侣共同资产与永久投资组合看板",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+DB_FILE = "portfolio.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            symbol TEXT,
+            name TEXT NOT NULL,
+            tx_type TEXT NOT NULL,
+            price REAL NOT NULL,
+            quantity REAL NOT NULL,
+            total_amount REAL NOT NULL,
+            notes TEXT
+        )
+    ''')
+    conn.commit()
+
+    # 初始化自定义标的最新参考价表（用于黄金、货币基金等无法直接通过 yfinance 获取的标的）
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS manual_prices (
+            symbol_or_name TEXT PRIMARY KEY,
+            last_price REAL NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def load_transactions():
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM transactions ORDER BY date DESC, id DESC", conn)
+    conn.close()
+    return df
+
+def save_transaction(date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO transactions (date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes))
+    conn.commit()
+    conn.close()
+
+def update_transaction(tx_id, date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE transactions
+        SET date=?, asset_type=?, platform=?, symbol=?, name=?, tx_type=?, price=?, quantity=?, total_amount=?, notes=?
+        WHERE id=?
+    ''', (date, asset_type, platform, symbol, name, tx_type, price, quantity, total_amount, notes, tx_id))
+    conn.commit()
+    conn.close()
+
+def delete_transaction(tx_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
+    conn.commit()
+    conn.close()
+
+def update_manual_price(key, price):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO manual_prices (symbol_or_name, last_price, updated_at)
+        VALUES (?, ?, ?)
+    ''', (key, price, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+def get_manual_prices():
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM manual_prices", conn)
+    conn.close()
+    return dict(zip(df['symbol_or_name'], df['last_price']))
+
+@st.cache_data(ttl=300)
+def fetch_realtime_price(symbol, asset_type, default_price):
+    """获取实时价格逻辑：股票/ETF调用yfinance，货币基金/黄金使用手动设置或成本价 fallback"""
+    if asset_type in ["股票/ETF", "加密货币"] and symbol:
+        try:
+            ticker = yf.Ticker(symbol)
+            fast_info = ticker.fast_info
+            if hasattr(fast_info, 'last_price') and fast_info.last_price is not None:
+                return float(fast_info.last_price)
+            hist = ticker.history(period="1d")
+            if not hist.empty:
+                return float(hist['Close'].iloc[-1])
+        except Exception:
+            pass
+    return default_price
+
+# -----------------------------------------------------------------------------
+# 2. 页面配置与 UI 样式注入
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="全资产智能投资看板", layout="wide", initial_sidebar_state="expanded")
+init_db()
 
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #f8f9fa;
-    }
+    .stApp { background-color: #f8f9fa; }
     .metric-card {
-        background-color: #ffffff;
+        background: white;
         border-radius: 12px;
-        padding: 18px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        border: 1px solid #e9ecef;
+        padding: 18px 24px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+        border: 1px solid #edf2f7;
         text-align: center;
     }
-    .metric-title {
-        font-size: 13px;
-        color: #6c757d;
-        margin-bottom: 6px;
-        font-weight: 600;
-    }
-    .metric-val {
-        font-size: 22px;
-        font-weight: 700;
-        color: #212529;
-    }
-    .metric-sub {
-        font-size: 12px;
-        color: #888888;
-        margin-top: 4px;
+    .metric-value { font-size: 26px; font-weight: 700; color: #1a202c; }
+    .metric-label { font-size: 14px; color: #718096; margin-bottom: 6px; }
+    .metric-sub { font-size: 12px; color: #38a169; }
+    div[data-testid="stForm"] {
+        background: white;
+        padding: 24px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+        border: 1px solid #edf2f7;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. 数据库初始化与坏数据自愈
+# 3. 导航栏与核心计算逻辑
 # -----------------------------------------------------------------------------
-DB_NAME = "portfolio.db"
+menu = st.sidebar.radio("导航菜单", ["📊 实时资产配置与智能再平衡", "➕ 标的买卖与资金录入", "📋 交易明细与数据管理"])
 
-def get_db():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+df_tx = load_transactions()
+manual_prices = get_manual_prices()
 
-def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS deposits (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    person TEXT, type TEXT, amount REAL, nav REAL, units REAL, date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ticker TEXT, category TEXT, action TEXT, qty REAL, price REAL, date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS cash (
-                    id INTEGER PRIMARY KEY, balance REAL)''')
-    c.execute("SELECT COUNT(*) FROM cash")
-    if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO cash VALUES (1, 0.0)")
-    
-    # 兼容升级：动态补充 category 资产归类字段
-    c.execute("PRAGMA table_info(trades)")
-    cols = [col[1] for col in c.fetchall()]
-    if 'category' not in cols and len(cols) > 0:
-        try:
-            c.execute("ALTER TABLE trades ADD COLUMN category TEXT DEFAULT '股票'")
-        except:
-            pass
-    conn.commit()
-
-init_db()
-
-# 数据库自动修复（清理引发 nan / inf 的历史数据）
-def auto_repair_data():
-    conn = get_db()
-    c = conn.cursor()
-    df_dep = pd.read_sql("SELECT * FROM deposits", conn)
-    if not df_dep.empty:
-        has_bad = False
-        for _, r in df_dep.iterrows():
-            u = r['units']
-            n = r['nav']
-            if pd.isna(u) or np.isinf(u) or pd.isna(n) or n <= 0:
-                has_bad = True
-                break
-        if has_bad:
-            c.execute("DELETE FROM deposits WHERE units IS NULL OR nav <= 0 OR units = 'inf' OR units = 'nan'")
-            conn.commit()
-
-auto_repair_data()
-
-# -----------------------------------------------------------------------------
-# 3. 核心计算与行情获取
-# -----------------------------------------------------------------------------
-@st.cache_data(ttl=300)
-def fetch_realtime_price(ticker):
-    try:
-        t = yf.Ticker(ticker)
-        price = t.fast_info.last_price
-        if price is None or price <= 0 or np.isnan(price):
-            hist = t.history(period="1d")
-            price = hist['Close'].iloc[-1] if not hist.empty else 0.0
-        return float(price) if not np.isnan(price) else 0.0
-    except Exception:
-        return 0.0
-
-def get_portfolio_summary():
-    conn = get_db()
-    df_dep = pd.read_sql("SELECT * FROM deposits", conn)
-    
-    total_principal = 0.0
-    my_principal = 0.0
-    her_principal = 0.0
-    total_units = 0.0
-    my_units = 0.0
-    her_units = 0.0
-    
-    if not df_dep.empty:
-        for _, r in df_dep.iterrows():
-            amt = r['amount'] if r['type'] == '存入' else -r['amount']
-            u = r['units'] if r['type'] == '存入' else -r['units']
-            if np.isinf(u) or np.isnan(u):
-                u = amt  # 安全降级防错
-            
-            total_principal += amt
-            total_units += u
-            if r['person'] == '我':
-                my_principal += amt
-                my_units += u
-            else:
-                her_principal += amt
-                her_units += u
-
-    if total_units <= 0 or np.isinf(total_units) or np.isnan(total_units):
-        total_units = 0.0
-        my_units = 0.0
-        her_units = 0.0
-
-    # 获取未投资现金余额
-    cash_df = pd.read_sql("SELECT balance FROM cash WHERE id=1", conn)
-    cash_balance = cash_df.iloc[0]['balance'] if not cash_df.empty else 0.0
-
-    # 计算持仓标的市值与分类
-    df_trades = pd.read_sql("SELECT * FROM trades", conn)
-    holdings = {}
-    
-    if not df_trades.empty:
-        for _, r in df_trades.iterrows():
-            t = r['ticker'].upper()
-            cat = r.get('category', '股票')
-            if pd.isna(cat) or not cat:
-                cat = '股票'
-            q = r['qty'] if r['action'] == '买入' else -r['qty']
-            
-            if t not in holdings:
-                holdings[t] = {"qty": 0.0, "category": cat}
-            holdings[t]["qty"] += q
-
-    stock_val = 0.0
-    category_val = {"股票": 0.0, "债券": 0.0, "黄金": 0.0, "现金": cash_balance, "其他": 0.0}
-    holdings_detail = []
-
-    for ticker, info in holdings.items():
-        qty = info["qty"]
-        cat = info["category"]
-        if qty > 0.0001:
-            p = fetch_realtime_price(ticker)
-            val = qty * p
-            stock_val += val
-            category_val[cat] = category_val.get(cat, 0.0) + val
-            holdings_detail.append({
-                "代码": ticker,
-                "资产分类": cat,
-                "持仓数量": qty,
-                "实时单价 ($)": p,
-                "当前市值 ($/￥)": val
-            })
-
-    total_market_val = cash_balance + stock_val
-    
-    # 核心 NAV 防除以零计算（彻底解决 NaN / inf）
-    if total_units <= 0:
-        current_nav = 1.0
-    else:
-        current_nav = total_market_val / total_units
-        if np.isnan(current_nav) or np.isinf(current_nav) or current_nav <= 0:
-            current_nav = 1.0
-
-    # 计算个人权益金额
-    if total_units > 0:
-        my_equity = my_units * current_nav
-        her_equity = her_units * current_nav
-    else:
-        my_equity = 0.0
-        her_equity = 0.0
-
-    # 计算整体累计收益与收益率
-    total_profit = total_market_val - total_principal
-    roi = (total_profit / total_principal * 100.0) if total_principal > 0 else 0.0
-
-    return {
-        "total_val": total_market_val,
-        "cash_balance": cash_balance,
-        "stock_val": stock_val,
-        "total_principal": total_principal,
-        "total_profit": total_profit,
-        "roi": roi,
-        "nav": current_nav,
-        "my_equity": my_equity,
-        "her_equity": her_equity,
-        "my_units": my_units,
-        "her_units": her_units,
-        "my_principal": my_principal,
-        "her_principal": her_principal,
-        "holdings_df": pd.DataFrame(holdings_detail),
-        "category_val": category_val
-    }
-
-summary = get_portfolio_summary()
-
-# -----------------------------------------------------------------------------
-# 4. 侧边栏（数据录入 & 管理）
-# -----------------------------------------------------------------------------
-st.sidebar.title("⚙️ 数据录入面板")
-action = st.sidebar.radio("选择操作类型", ["新增存取款 (Cash In/Out)", "录入买卖标的 (Trade)", "🧹 坏数据修复与清空"])
-
-conn = get_db()
-c = conn.cursor()
-
-if action == "新增存取款 (Cash In/Out)":
-    st.sidebar.subheader("➕ 存取款录入")
-    with st.sidebar.form("dep_form"):
-        person = st.selectbox("出资人", ["我", "女友"])
-        d_type = st.selectbox("类型", ["存入", "取出"])
-        amt = st.number_input("金额 (￥/$)", min_value=1.0, value=1000.0, step=100.0)
+# 计算持仓与资产大类逻辑
+holdings = {}
+if not df_tx.empty:
+    for _, row in df_tx.iterrows():
+        key = row['symbol'] if row['symbol'] and row['symbol'].strip() else row['name']
+        if key not in holdings:
+            holdings[key] = {
+                'name': row['name'],
+                'symbol': row['symbol'],
+                'asset_type': row['asset_type'],
+                'platform': row['platform'],
+                'quantity': 0.0,
+                'total_cost': 0.0
+            }
         
-        if st.form_submit_button("确认提交"):
-            c_nav = summary['nav']
-            if c_nav <= 0 or np.isnan(c_nav) or np.isinf(c_nav):
-                c_nav = 1.0
-                
-            units = amt / c_nav if d_type == "存入" else -(amt / c_nav)
-            date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            c.execute("INSERT INTO deposits (person, type, amount, nav, units, date) VALUES (?, ?, ?, ?, ?, ?)",
-                      (person, d_type, amt if d_type == "存入" else -amt, c_nav, units, date_str))
-            
-            new_cash = summary['cash_balance'] + (amt if d_type == "存入" else -amt)
-            c.execute("UPDATE cash SET balance = ? WHERE id = 1", (new_cash,))
-            conn.commit()
-            st.sidebar.success("✅ 存取款成功录入！")
-            st.rerun()
-
-elif action == "录入买卖标的 (Trade)":
-    st.sidebar.subheader("📈 标的买卖录入")
-    with st.sidebar.form("trade_form"):
-        ticker = st.text_input("代码 (如 NVDA, TLT, GLD, AAPL)", value="NVDA")
-        cat = st.selectbox("资产分类 (用于永久组合对比)", ["股票", "债券", "黄金", "其他"])
-        t_action = st.selectbox("交易方向", ["买入", "卖出"])
-        t_qty = st.number_input("持仓数量", min_value=0.0001, value=1.0, step=1.0)
-        t_price = st.number_input("成交价格 ($)", min_value=0.01, value=100.0, step=5.0)
+        qty = row['quantity']
+        amt = row['total_amount']
         
-        if st.form_submit_button("确认提交交易"):
-            cost = t_qty * t_price
-            if t_action == "买入" and cost > summary['cash_balance']:
-                st.sidebar.error("❌ 现金余额不足，无法买入！")
-            else:
-                date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                c.execute("INSERT INTO trades (ticker, category, action, qty, price, date) VALUES (?, ?, ?, ?, ?, ?)",
-                          (ticker.upper().strip(), cat, t_action, t_qty, t_price, date_str))
+        if row['tx_type'] in ['买入', '存入']:
+            holdings[key]['quantity'] += qty
+            holdings[key]['total_cost'] += amt
+        elif row['tx_type'] in ['卖出', '取出']:
+            holdings[key]['quantity'] -= qty
+            holdings[key]['total_cost'] -= amt
+
+# 汇总有效持仓数据
+portfolio_list = []
+for key, item in holdings.items():
+    if item['quantity'] > 0.0001:
+        # 获取实时或自定义单价
+        last_known_price = manual_prices.get(key, item['total_cost'] / item['quantity'] if item['quantity'] > 0 else 0)
+        current_unit_price = fetch_realtime_price(item['symbol'], item['asset_type'], last_known_price)
+        market_value = current_unit_price * item['quantity']
+        profit = market_value - item['total_cost']
+        profit_rate = (profit / item['total_cost'] * 100) if item['total_cost'] > 0 else 0
+        
+        portfolio_list.append({
+            'key': key,
+            'name': item['name'],
+            'symbol': item['symbol'],
+            'asset_type': item['asset_type'],
+            'platform': item['platform'],
+            'quantity': item['quantity'],
+            'avg_cost': item['total_cost'] / item['quantity'] if item['quantity'] > 0 else 0,
+            'current_price': current_unit_price,
+            'total_cost': item['total_cost'],
+            'market_value': market_value,
+            'profit': profit,
+            'profit_rate': profit_rate
+        })
+
+df_portfolio = pd.DataFrame(portfolio_list)
+
+# -----------------------------------------------------------------------------
+# 4. 页面 1: 实时资产配置与智能再平衡
+# -----------------------------------------------------------------------------
+if menu == "📊 实时资产配置与智能再平衡":
+    st.title("📊 实时资产配置与智能调仓")
+    
+    if df_portfolio.empty:
+        st.info("💡 暂无持仓数据，请前往『标的买卖与资金录入』添加第一笔资产。")
+    else:
+        total_market_value = df_portfolio['market_value'].sum()
+        total_cost = df_portfolio['total_cost'].sum()
+        total_profit = total_market_value - total_cost
+        total_profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0
+        
+        # 顶部 KPI 卡片
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">资产总市值</div><div class="metric-value">${total_market_value:,.2f}</div></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">投入总成本</div><div class="metric-value">${total_cost:,.2f}</div></div>', unsafe_allow_html=True)
+        with col3:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">未实现总盈亏</div><div class="metric-value" style="color:{"#38a169" if total_profit>=0 else "#e53e3e"}">${total_profit:,.2f}</div></div>', unsafe_allow_html=True)
+        with col4:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">总收益率</div><div class="metric-value" style="color:{"#38a169" if total_profit_rate>=0 else "#e53e3e"}">{total_profit_rate:+.2f}%</div></div>', unsafe_allow_html=True)
+        
+        st.divider()
+        
+        # 可视化图表展示
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_type = px.pie(df_portfolio, values='market_value', names='asset_type', title="按资产类别分布 (含黄金/货币基金/股票)", hole=0.4)
+            st.plotly_chart(fig_type, use_container_width=True)
+        with c2:
+            fig_platform = px.pie(df_portfolio, values='market_value', names='platform', title="按投资平台分布 (TNG/MooMoo/券商)", hole=0.4)
+            st.plotly_chart(fig_platform, use_container_width=True)
+            
+        # 手动更新非实时接口标的价格（如黄金/货基）
+        with st.expander("⚙️ 快速更新非自动联动标的（如 TNG 黄金 / MooMoo 货币基金）价格"):
+            st.caption("对于无法自动通过美股/港股代码抓取实时价的标的，可在此手动校准最新单价：")
+            m_col1, m_col2, m_col3 = st.columns(3)
+            non_stock = df_portfolio[df_portfolio['asset_type'].isin(["黄金/贵金属", "货币基金/现金", "其他"])]
+            if not non_stock.empty:
+                selected_m_asset = m_col1.selectbox("选择要校准的标的", non_stock['key'].tolist())
+                current_val = manual_prices.get(selected_m_asset, float(non_stock[non_stock['key']==selected_m_asset]['current_price'].iloc[0]))
+                new_val = m_col2.number_input("最新实时单价/单位净值", value=float(current_val), format="%.4f")
+                if m_col3.button("更新市值"):
+                    update_manual_price(selected_m_asset, new_val)
+                    st.success("更新成功！系统已依据最新单价重新计算总资产。")
+                    st.rerun()
+
+        st.divider()
+        
+        # 永久投资组合智能再平衡模块
+        st.subheader("⚖️ 永久投资组合 (Permanent Portfolio) 智能再平衡")
+        st.write("根据哈利·布朗 (Harry Browne) 经典永久投资组合策略，实时比对当前权重与目标配比，并计算所需买卖金额。")
+        
+        # 归类资产至 4 大类别
+        perm_map = {
+            "股票/ETF": "股票 (Stock)",
+            "黄金/贵金属": "黄金 (Gold)",
+            "货币基金/现金": "现金/货币基金 (Cash/MMF)",
+            "加密货币": "股票 (Stock)",
+            "其他": "现金/货币基金 (Cash/MMF)"
+        }
+        
+        df_portfolio['perm_category'] = df_portfolio['asset_type'].map(perm_map)
+        perm_summary = df_portfolio.groupby('perm_category')['market_value'].sum().reset_index()
+        
+        # 包含可能缺失的类别
+        all_categories = ["股票 (Stock)", "黄金 (Gold)", "现金/货币基金 (Cash/MMF)", "债券 (Bond)"]
+        existing_cats = perm_summary['perm_category'].tolist()
+        for cat in all_categories:
+            if cat not in existing_cats:
+                perm_summary = pd.concat([perm_summary, pd.DataFrame([{'perm_category': cat, 'market_value': 0.0}])], ignore_index=True)
                 
-                cash_diff = -cost if t_action == "买入" else cost
-                c.execute("UPDATE cash SET balance = ? WHERE id = 1", (summary['cash_balance'] + cash_diff,))
-                conn.commit()
-                st.sidebar.success("✅ 交易记录成功！")
+        perm_summary['current_ratio'] = perm_summary['market_value'] / total_market_value
+        perm_summary['target_ratio'] = 0.25  # 默认 25% 均分
+        perm_summary['target_value'] = total_market_value * perm_summary['target_ratio']
+        perm_summary['rebalance_amount'] = perm_summary['target_value'] - perm_summary['market_value']
+        
+        # 格式化表格显示
+        rebalance_display = perm_summary.copy()
+        rebalance_display['当前市值'] = rebalance_display['market_value'].apply(lambda x: f"${x:,.2f}")
+        rebalance_display['当前占比'] = rebalance_display['current_ratio'].apply(lambda x: f"{x*100:.2f}%")
+        rebalance_display['目标占比'] = rebalance_display['target_ratio'].apply(lambda x: f"{x*100:.2f}%")
+        rebalance_display['目标市值'] = rebalance_display['target_value'].apply(lambda x: f"${x:,.2f}")
+        rebalance_display['建议调仓金额'] = rebalance_display['rebalance_amount'].apply(
+            lambda x: f"🟢 需买入 ${x:,.2f}" if x > 0 else (f"🔴 需卖出 ${abs(x):,.2f}" if x < 0 else "✅ 维持不变")
+        )
+        
+        st.dataframe(
+            rebalance_display[['perm_category', '当前市值', '当前占比', '目标占比', '目标市值', '建议调仓金额']],
+            use_container_width=True,
+            hide_index=True
+        )
+
+# -----------------------------------------------------------------------------
+# 5. 页面 2: 标的买卖与资金录入
+# -----------------------------------------------------------------------------
+elif menu == "➕ 标的买卖与资金录入":
+    st.title("➕ 标的买卖与资金变动录入")
+    st.caption("支持多资产类型录入：股票、黄金 (如 TNG e-Mas)、货币基金 (如 MooMoo Maybank Retail MMF) 及现金增减。")
+    
+    with st.form("trade_entry_form", clear_on_submit=True):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            asset_type = st.selectbox("1. 资产类型", ["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"])
+            tx_type = st.selectbox("2. 交易类型", ["买入", "卖出", "存入", "取出"])
+            date_val = st.date_input("3. 交易日期", datetime.now())
+            
+        with col2:
+            platform = st.text_input("4. 投资平台", placeholder="例如: TNG e-Mas, MooMoo, 富途, Interactive Brokers")
+            name = st.text_input("5. 标的名称", placeholder="例如: TNG 黄金, Maybank MMF, 苹果股票")
+            symbol = st.text_input("6. 标的代码 (选填)", placeholder="例如: AAPL, 0102.KL, 无代码可留空")
+            
+        with col3:
+            price = st.number_input("7. 成交单价 / 单位净值", min_value=0.0, format="%.4f", value=1.0000)
+            quantity = st.number_input("8. 数量 / 克数 / 份额", min_value=0.0, format="%.4f", value=1.0000)
+            notes = st.text_area("9. 备注 (选填)", placeholder="例如：每月定投，优惠券扣减等")
+            
+        calculated_total = price * quantity
+        st.markdown(f"**💡 自动计算成交总金额: ${calculated_total:,.2f}**")
+        
+        submitted = st.form_submit_button("🚀 提交并保存交易记录", use_container_width=True)
+        if submitted:
+            if not platform or not name:
+                st.error("⚠️ 平台名称与标的名称为必填项！")
+            else:
+                save_transaction(
+                    date_val.strftime("%Y-%m-%d"),
+                    asset_type,
+                    platform,
+                    symbol.upper().strip() if symbol else "",
+                    name.strip(),
+                    tx_type,
+                    price,
+                    quantity,
+                    calculated_total,
+                    notes
+                )
+                st.success(f"✅ 成功录入 {name} {tx_type} 记录！资产配置已同步更新。")
+
+# -----------------------------------------------------------------------------
+# 6. 页面 3: 交易明细与数据管理 (编辑/删除)
+# -----------------------------------------------------------------------------
+elif menu == "📋 交易明细与数据管理":
+    st.title("📋 交易明细与数据修改 / 删除")
+    st.caption("在此处可实时剔除、修改任何历史交易，系统将自动重算整体持仓与收益率。")
+    
+    if df_tx.empty:
+        st.info("💡 暂无交易记录。")
+    else:
+        st.subheader("完整历史明细表")
+        st.dataframe(df_tx, use_container_width=True, hide_index=True)
+        
+        st.divider()
+        
+        # 操作区：剔除或编辑指定记录
+        c_edit, c_del = st.columns(2)
+        
+        with c_del:
+            st.subheader("🗑️ 删除指定交易")
+            tx_ids = df_tx['id'].tolist()
+            delete_id = st.selectbox("选择要剔除的交易 ID", tx_ids, key="del_select")
+            
+            selected_row = df_tx[df_tx['id'] == delete_id].iloc[0]
+            st.warning(f"即将删除: ID {delete_id} | {selected_row['date']} | {selected_row['platform']} - {selected_row['name']} | {selected_row['tx_type']} ${selected_row['total_amount']:,.2f}")
+            
+            if st.button("确认一键删除该记录", type="primary"):
+                delete_transaction(delete_id)
+                st.success(f"✅ ID {delete_id} 已成功剔除，资产数据已实时同步变动！")
                 st.rerun()
 
-elif action == "🧹 坏数据修复与清空":
-    st.sidebar.subheader("🛠️ 数据管理与修剪")
-    st.sidebar.write("如页面出现 nan/inf 或历史存取数据录入错误：")
-    
-    if st.sidebar.button("🧹 一键清除异常 NaN 数据"):
-        c.execute("DELETE FROM deposits WHERE units IS NULL OR nav <= 0")
-        conn.commit()
-        st.sidebar.success("已成功清理！")
-        st.rerun()
-
-    if st.sidebar.button("🚨 重置数据库 (清空所有记录)"):
-        c.execute("DELETE FROM deposits")
-        c.execute("DELETE FROM trades")
-        c.execute("UPDATE cash SET balance = 0.0 WHERE id = 1")
-        conn.commit()
-        st.sidebar.warning("所有历史数据已全额清空！")
-        st.rerun()
-
-# -----------------------------------------------------------------------------
-# 5. 主看板顶部 Metrics 核心指标展示
-# -----------------------------------------------------------------------------
-st.title("👩‍❤️‍👨 Our Capital | 情侣共同资产与永久投资组合")
-st.caption("实时拉取全球行情 · 自动按基金净值法 (NAV) 折算个人份额 · 永久投资组合智能再平衡")
-
-m1, m2, m3, m4, m5 = st.columns(5)
-with m1:
-    st.markdown(f'''
-    <div class="metric-card">
-        <div class="metric-title">💼 组合实时总市值</div>
-        <div class="metric-val">￥{summary['total_val']:,.2f}</div>
-        <div class="metric-sub">未投资现金: ￥{summary['cash_balance']:,.2f}</div>
-    </div>
-    ''', unsafe_allow_html=True)
-
-with m2:
-    p_color = "#28a745" if summary['total_profit'] >= 0 else "#dc3545"
-    st.markdown(f'''
-    <div class="metric-card">
-        <div class="metric-title">🌱 累计本金 / 收益</div>
-        <div class="metric-val" style="color: {p_color}">￥{summary['total_profit']:+,.2f}</div>
-        <div class="metric-sub">本金: ￥{summary['total_principal']:,.2f} ({summary['roi']:+.2f}%)</div>
-    </div>
-    ''', unsafe_allow_html=True)
-
-with m3:
-    st.markdown(f'''
-    <div class="metric-card">
-        <div class="metric-title">🎯 当前单位净值 (NAV)</div>
-        <div class="metric-val" style="color: #0d6efd">{summary['nav']:.4f}</div>
-        <div class="metric-sub">初始基准: 1.0000</div>
-    </div>
-    ''', unsafe_allow_html=True)
-
-with m4:
-    st.markdown(f'''
-    <div class="metric-card">
-        <div class="metric-title">💙 我的权益金额</div>
-        <div class="metric-val" style="color: #0d6efd">￥{summary['my_equity']:,.2f}</div>
-        <div class="metric-sub">持有份额: {summary['my_units']:,.2f}</div>
-    </div>
-    ''', unsafe_allow_html=True)
-
-with m5:
-    st.markdown(f'''
-    <div class="metric-card">
-        <div class="metric-title">🩷 女友权益金额</div>
-        <div class="metric-val" style="color: #d63384">￥{summary['her_equity']:,.2f}</div>
-        <div class="metric-sub">持有份额: {summary['her_units']:,.2f}</div>
-    </div>
-    ''', unsafe_allow_html=True)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# 6. 多页签功能区 (Tabs)
-# -----------------------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["📊 实时资产配置", "⚖️ 永久投资组合 (Permanent Portfolio)", "📜 资金与交易明细"])
-
-# TAB 1: 资产配置与持仓
-with tab1:
-    col_l, col_r = st.columns([1, 1])
-    with col_l:
-        st.subheader("📊 实时资产分布图")
-        chart_data = []
-        if summary['cash_balance'] > 0:
-            chart_data.append({"类别": "未投资现金", "金额": summary['cash_balance']})
-        if not summary['holdings_df'].empty:
-            for _, r in summary['holdings_df'].iterrows():
-                chart_data.append({"类别": f"{r['代码']} ({r['资产分类']})", "金额": r['当前市值 ($/￥)']})
-        
-        if chart_data:
-            df_pie = pd.DataFrame(chart_data)
-            fig_pie = px.pie(df_pie, names='类别', values='金额', hole=0.45,
-                             color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=380)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        else:
-            st.info("💡 暂无持仓资产，请在左侧面板录入。")
-
-    with col_r:
-        st.subheader("📋 实时持仓明细表")
-        if not summary['holdings_df'].empty:
-            st.dataframe(
-                summary['holdings_df'],
-                use_container_width=True,
-                height=350
-            )
-        else:
-            st.write("目前暂无股票/标的持仓。")
-
-# TAB 2: 永久投资组合
-with tab2:
-    st.subheader("⚖️ 哈里·布朗 (Harry Browne) 永久投资组合看板")
-    st.markdown("""
-    💡 **永久投资组合** 建议将资产划分为四等分（各占 **25%**），以应对任何经济周期：
-    - 📈 **股票 (25%)**：经济繁荣期
-    - 🏛️ **债券 (25%)**：经济通缩期
-    - 🥇 **黄金 (25%)**：高通胀期
-    - 💵 **现金 (25%)**：经济衰退/紧缩期
-    """)
-    
-    tot_val = summary['total_val']
-    cat_vals = summary['category_val']
-    
-    if tot_val > 0:
-        actual_pct = {
-            "股票": (cat_vals.get("股票", 0.0) / tot_val) * 100.0,
-            "债券": (cat_vals.get("债券", 0.0) / tot_val) * 100.0,
-            "黄金": (cat_vals.get("黄金", 0.0) / tot_val) * 100.0,
-            "现金": (cat_vals.get("现金", 0.0) / tot_val) * 100.0,
-            "其他": (cat_vals.get("其他", 0.0) / tot_val) * 100.0
-        }
-    else:
-        actual_pct = {"股票": 0.0, "债券": 0.0, "黄金": 0.0, "现金": 100.0, "其他": 0.0}
-
-    df_perm = pd.DataFrame({
-        "资产类别": ["股票", "债券", "黄金", "现金"],
-        "实际占比 (%)": [actual_pct["股票"], actual_pct["债券"], actual_pct["黄金"], actual_pct["现金"]],
-        "目标占比 (%)": [25.0, 25.0, 25.0, 25.0],
-        "实际金额": [cat_vals.get("股票",0), cat_vals.get("债券",0), cat_vals.get("黄金",0), cat_vals.get("现金",0)],
-        "目标金额": [tot_val * 0.25] * 4
-    })
-
-    c_chart, c_rebalance = st.columns([1.2, 1])
-    
-    with c_chart:
-        fig_perm = go.Figure()
-        fig_perm.add_trace(go.Bar(
-            x=df_perm['资产类别'], y=df_perm['实际占比 (%)'],
-            name='当前实际占比', marker_color='#3b82f6'
-        ))
-        fig_perm.add_trace(go.Bar(
-            x=df_perm['资产类别'], y=df_perm['目标占比 (%)'],
-            name='目标占比 (25%)', marker_color='#10b981', opacity=0.6
-        ))
-        fig_perm.update_layout(
-            barmode='group',
-            title="实际资产配置 vs 永久组合标准配置 (25% x 4)",
-            yaxis_title="占比 (%)",
-            height=360,
-            margin=dict(t=40, b=20, l=20, r=20)
-        )
-        st.plotly_chart(fig_perm, use_container_width=True)
-
-    with c_rebalance:
-        st.subheader("🛠️ 智能再平衡调仓建议")
-        if tot_val > 0:
-            rebalance_data = []
-            for _, r in df_perm.iterrows():
-                diff_val = r['目标金额'] - r['实际金额']
-                if diff_val > 10:
-                    action_text = f"🟢 建议买入 ￥{diff_val:,.2f}"
-                elif diff_val < -10:
-                    action_text = f"🔴 建议卖出 ￥{abs(diff_val):,.2f}"
-                else:
-                    action_text = "✨ 完美匹配，无需调整"
+        with c_edit:
+            st.subheader("✏️ 编辑指定交易")
+            edit_id = st.selectbox("选择要修改的交易 ID", tx_ids, key="edit_select")
+            row_e = df_tx[df_tx['id'] == edit_id].iloc[0]
+            
+            with st.form("edit_form"):
+                e_date = st.date_input("日期", datetime.strptime(row_e['date'], "%Y-%m-%d"))
+                e_asset_type = st.selectbox("资产类型", ["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"], index=["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"].index(row_e['asset_type']) if row_e['asset_type'] in ["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"] else 0)
+                e_platform = st.text_input("平台", value=row_e['platform'])
+                e_name = st.text_input("名称", value=row_e['name'])
+                e_symbol = st.text_input("代码", value=row_e['symbol'] if row_e['symbol'] else "")
+                e_tx_type = st.selectbox("交易类型", ["买入", "卖出", "存入", "取出"], index=["买入", "卖出", "存入", "取出"].index(row_e['tx_type']) if row_e['tx_type'] in ["买入", "卖出", "存入", "取出"] else 0)
+                e_price = st.number_input("单价", value=float(row_e['price']), format="%.4f")
+                e_qty = st.number_input("数量", value=float(row_e['quantity']), format="%.4f")
+                e_notes = st.text_input("备注", value=row_e['notes'] if row_e['notes'] else "")
                 
-                rebalance_data.append({
-                    "资产类别": r['资产类别'],
-                    "当前金额": f"￥{r['实际金额']:,.2f}",
-                    "当前占比": f"{r['实际占比 (%)']:.1f}%",
-                    "调仓建议": action_text
-                })
-            st.dataframe(pd.DataFrame(rebalance_data), use_container_width=True)
-        else:
-            st.info("💡 请先存入资金，即可自动生成调仓再平衡建议。")
-
-# TAB 3: 资金与交易明细
-with tab3:
-    col_t1, col_t2 = st.columns([1, 1])
-    
-    with col_t1:
-        st.subheader("💳 存取款资金明细")
-        df_dep_all = pd.read_sql("SELECT * FROM deposits ORDER BY id DESC", conn)
-        if not df_dep_all.empty:
-            st.dataframe(
-                df_dep_all.rename(columns={
-                    "id": "序号", "person": "出资人", "type": "类型",
-                    "amount": "金额", "nav": "折算NAV", "units": "折算份额", "date": "时间"
-                }),
-                use_container_width=True,
-                height=400
-            )
-        else:
-            st.write("暂无存取款记录。")
-
-    with col_t2:
-        st.subheader("📈 买卖交易明细")
-        df_trades_all = pd.read_sql("SELECT * FROM trades ORDER BY id DESC", conn)
-        if not df_trades_all.empty:
-            st.dataframe(
-                df_trades_all.rename(columns={
-                    "id": "序号", "ticker": "代码", "category": "分类",
-                    "action": "方向", "qty": "数量", "price": "成交单价", "date": "时间"
-                }),
-                use_container_width=True,
-                height=400
-            )
-        else:
-            st.write("暂无买卖交易记录。")
+                if st.form_submit_button("保存修改"):
+                    update_transaction(
+                        edit_id,
+                        e_date.strftime("%Y-%m-%d"),
+                        e_asset_type,
+                        e_platform,
+                        e_symbol.upper().strip() if e_symbol else "",
+                        e_name.strip(),
+                        e_tx_type,
+                        e_price,
+                        e_qty,
+                        e_price * e_qty,
+                        e_notes
+                    )
+                    st.success(f"✅ ID {edit_id} 已成功更新！")
+                    st.rerun()
