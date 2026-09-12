@@ -153,11 +153,15 @@ st.markdown("""
     .cute-card {
         background: #ffffff;
         border-radius: 18px;
-        padding: 18px;
+        padding: 16px;
         box-shadow: 0 8px 20px rgba(255, 182, 193, 0.15);
         border: 2px solid #ffe6ea;
         text-align: center;
-        margin-bottom: 12px;
+        height: 125px !important;            /* 强制锁定固定大高度 */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;             /* 垂直居中对齐 */
+        align-items: center;                 /* 水平居中对齐 */
     }
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
@@ -317,22 +321,34 @@ df_equity = pd.DataFrame(equity_data)
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
-    k1, k2, k3, k4 = st.columns(4)
+# 计算实际已投资标的总市值 (剔除备用金 MMF 后的纯投资标的)
+    invested_assets_mv = total_assets_mv - emergency_fund_mv
+
+    # 渲染顶栏核心卡片
+    k1, k2, k3, k4, k5 = st.columns(5)
+    
     with k1:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产 (含备用金)</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
+    
     with k2:
         st.markdown(f'<div class="cute-card"><div class="cute-title">💵 未分配投资现金</div><div class="cute-value" style="color:#2a9d8f;">${cash_balance:,.2f}</div></div>', unsafe_allow_html=True)
+    
     with k3:
         st.markdown(f'<div class="cute-card"><div class="cute-title">🛡️ 紧急备用金 (MMF)</div><div class="cute-value" style="color:#e9c46a;">${emergency_fund_mv:,.2f}</div></div>', unsafe_allow_html=True)
+    
     with k4:
+        st.markdown(f'<div class="cute-card"><div class="cute-title">📈 已投资标的总额</div><div class="cute-value" style="color:#ff5c8a;">${invested_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
+    
+    with k5:
         profit_color = "#2a9d8f" if total_profit >= 0 else "#e76f51"
         pct_str = f"+{profit_pct:.2f}%" if total_profit >= 0 else f"{profit_pct:.2f}%"
         st.markdown(f'''
             <div class="cute-card">
                 <div class="cute-title">✨ 累计盈亏</div>
-                <div class="cute-value" style="color:{profit_color};">
-                    ${total_profit:,.2f} <span style="font-size:13px; font-weight:600;">({pct_str})</span>
+                <div class="cute-value" style="color:{profit_color}; font-size: 20px;">
+                    ${total_profit:,.2f}
                 </div>
+                <div style="font-size:12px; font-weight:700; color:{profit_color}; margin-top: 2px;">({pct_str})</div>
             </div>
         ''', unsafe_allow_html=True)
 
