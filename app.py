@@ -145,7 +145,7 @@ def fetch_price(symbol, asset_type, default_price):
             pass
     return default_price
 
-@st.cache_data(ttl=900)  # 15分钟缓存，零卡顿
+@st.cache_data(ttl=900)  # 15分钟缓存
 def calculate_auto_trading_signals(symbol: str, risk_reward_ratio: float = 2.0):
     """自动获取股票数据并计算：较优买点、ATR止损点、止盈点"""
     if not symbol or not symbol.strip():
@@ -245,7 +245,7 @@ with st.sidebar:
     st.markdown("### 🌸 导航菜单")
     nav_items = [
         ("🍰  共享资金池总览", "🍰 共享资金池总览"),
-        ("💵  资金存入与归桶", "💵 资金存入/归桶"),
+        ("💵  资金存入与提取", "💵 资金存入/提取"),
         ("📈  买卖标的记账", "📈 买卖标的记账"),
         ("📜  交易明细与日志", "📜 交易明细与记录")
     ]
@@ -289,32 +289,14 @@ df_tx = load_tx()
 manual_prices = get_manual_prices()
 
 capital_summary = {'👦 男方': 0.0, '👧 女方': 0.0}
-bucket_totals = {
-    "✈️ 旅游专项基金": 0.0,
-    "🚗 车辆维修/Service": 0.0,
-    "🎉 娱乐与日常消费": 0.0,
-    "📦 其他专项预留": 0.0
-}
 
 if not df_cap.empty:
     for _, r in df_cap.iterrows():
         m, amt = r['member'], r['amount']
-        notes_str = str(r['notes'])
-        
-        # 本金总出资
         if r['type'] in ['注资/存入本金', '存入']:
             capital_summary[m] += amt
         elif r['type'] in ['撤资/提取本金', '取出']:
             capital_summary[m] -= amt
-            
-        # 专项桶统计
-        for b_key in bucket_totals.keys():
-            keyword = b_key.split(" ")[1] if " " in b_key else b_key
-            if keyword in notes_str:
-                if r['type'] in ['注资/存入本金', '存入']:
-                    bucket_totals[b_key] += amt
-                elif r['type'] in ['撤资/提取本金', '取出']:
-                    bucket_totals[b_key] -= amt
 
 total_capital = sum(capital_summary.values())
 
@@ -411,20 +393,6 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 🪣 专项储蓄与消费桶看板
-    st.markdown("##### 🪣 专项储蓄与消费桶 (预留预算，不干扰投资再平衡)")
-    b_cols = st.columns(4)
-    for idx, (b_name, b_val) in enumerate(bucket_totals.items()):
-        with b_cols[idx]:
-            st.markdown(f"""
-            <div class="cute-card" style="height: 100px !important;">
-                <div class="cute-title">{b_name}</div>
-                <div class="cute-value" style="font-size: 18px; color: #4a4a4a;">${b_val:,.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
     col_e1, col_e2 = st.columns([3, 2])
     with col_e1:
         st.subheader("👩‍❤️‍👨 两人出资与权益份额")
@@ -471,7 +439,6 @@ if menu == "🍰 共享资金池总览":
     # 🏛️ 永久投资组合
     st.subheader("🏛️ 永久投资组合 (Permanent Portfolio)")
     
-    # 高亮且无乱码的自定义提示框
     st.markdown(f"""
     <div style="background-color: #fff0f3; border-left: 4px solid #ff5c8a; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; color: #555;">
         💡 <b>再平衡独立计算机制</b>：已自动剔除紧急备用金 <b style="font-size: 16px; color: #e76f51;">${emergency_fund_mv:,.2f}</b>，当前实际参与投资配置的总额为 <b style="font-size: 16px; color: #2a9d8f;">${investable_total_net_worth:,.2f}</b>。
@@ -610,30 +577,21 @@ if menu == "🍰 共享资金池总览":
                 st.success("已更新价格！")
                 st.rerun()
 
-elif menu == "💵 资金存入/归桶":
-    st.title("💵 个人资金入池与预分配归桶")
+elif menu == "💵 资金存入/提取":
+    st.title("💵 个人资金入池与提取记录")
     with st.form("cap_form", clear_on_submit=True):
         f1, f2 = st.columns(2)
         with f1:
-            member = st.selectbox("出资人", ["👦 男方", "👧 女方"])
+            member = st.selectbox("出资/提取人", ["👦 男方", "👧 女方"])
             type_val = st.selectbox("存取类型", ["注资/存入本金", "撤资/提取本金"])
             date_val = st.date_input("日期", datetime.now())
         with f2:
-            amount = st.number_input("本次存入/提取总金额 ($)", min_value=1.0, value=1000.0)
-            target_bucket = st.selectbox("归属资金桶/用途", [
-                "📈 投资池现金 (参与再平衡)",
-                "🛡️ 紧急备用金 (MMF)",
-                "✈️ 旅游专项基金",
-                "🚗 车辆维修/Service",
-                "🎉 娱乐与日常消费",
-                "📦 其他专项预留"
-            ])
-            notes = st.text_input("备注", placeholder="如：3月薪水存入，分配给旅游和投资")
+            amount = st.number_input("本次存入/提取金额 ($)", min_value=1.0, value=1000.0)
+            notes = st.text_input("备注", placeholder="如：3月薪水存入")
             
-        if st.form_submit_button("💗 确认提交并入桶", use_container_width=True):
-            full_notes = f"[{target_bucket}] {notes}" if notes else f"[{target_bucket}]"
-            save_capital(date_val.strftime("%Y-%m-%d"), member, type_val, amount, full_notes)
-            st.success(f"已成功存入 ${amount:,.2f} 到 【{target_bucket}】！")
+        if st.form_submit_button("💗 确认提交记录", use_container_width=True):
+            save_capital(date_val.strftime("%Y-%m-%d"), member, type_val, amount, notes)
+            st.success(f"已成功记录 ${amount:,.2f}！")
             st.rerun()
 
 elif menu == "📈 买卖标的记账":
@@ -673,7 +631,7 @@ elif menu == "📈 买卖标的记账":
 
 elif menu == "📜 交易明细与记录":
     st.title("📜 交易明细与历史日志")
-    st.markdown("在此处可以查看所有历史记账，进行编辑或删除。对备用金条目的修改也会同步联动更新。")
+    st.markdown("在此处可以查看所有历史记账，进行编辑或删除。")
 
     tab_cap, tab_tx = st.tabs(["💵 本金存取明细 Log", "📈 标的交易明细 Log"])
 
