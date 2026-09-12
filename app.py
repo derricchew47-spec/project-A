@@ -164,7 +164,7 @@ st.markdown("""
     
     /* 大号正方形拉长卡片按钮样式 */
     div[data-testid="stSidebar"] div.stButton > button {
-        height: 130px !important;            /* 高度从85调高至130 */
+        height: 300px !important;            /* 高度从85调高至130 */
         width: 100% !important;
         border-radius: 20px !important;
         font-size: 14px !important;
