@@ -7,9 +7,8 @@ import yfinance as yf
 import os
 
 # -----------------------------------------------------------------------------
-# 1. 数据库路径锁定 (解决找不到文件与数据清零问题)
+# 1. 数据库路径锁定 (保证数据永不丢失)
 # -----------------------------------------------------------------------------
-# 自动锁定当前代码运行的文件路径，确保数据库固定保存在程序同级目录下
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "portfolio_pool_cute.db")
 
@@ -143,7 +142,7 @@ def fetch_price(symbol, asset_type, default_price):
     return default_price
 
 # -----------------------------------------------------------------------------
-# 2. UI 主题与卡片导航配置
+# 2. UI 主题与样式
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
@@ -163,31 +162,77 @@ st.markdown("""
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
     
-    /* 调整分割控制/卡片导航按钮的样式 */
-    div[data-testid="stSegmentedControl"] {
-        width: 100%;
+    /* 大号导航按钮样式调整 */
+    div[data-testid="stSidebar"] div.stButton > button {
+        height: 85px !important;
+        width: 100% !important;
+        border-radius: 16px !important;
+        font-size: 15px !important;
+        font-weight: bold !important;
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        line-height: 1.3 !important;
+        box-shadow: 0 4px 12px rgba(255, 182, 193, 0.2);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# 侧边栏：卡片导航模式 & 数据管理
+# -----------------------------------------------------------------------------
+# 3. 侧边栏：大号正方形 (2x2) 卡片导航
+# -----------------------------------------------------------------------------
+if 'current_menu' not in st.session_state:
+    st.session_state.current_menu = "🍰 共享资金池总览"
+
 with st.sidebar:
     st.markdown("### 🌸 导航菜单")
-    menu_options = ["🍰 共享资金池总览", "💵 资金存入/取出", "📈 买卖标的记账", "📜 交易明细与记录"]
     
-    # 卡片分段控制器导航（现代选项卡样式）
-    menu = st.segmented_control(
-        "切换功能页面",
-        menu_options,
-        default=menu_options[0],
-        label_visibility="collapsed"
-    )
+    nav_items = [
+        ("🍰 共享资金池\n总览", "🍰 共享资金池总览"),
+        ("💵 资金存入\n与取出", "💵 资金存入/取出"),
+        ("📈 买卖标的\n记账", "📈 买卖标的记账"),
+        ("📜 交易明细\n与日志", "📜 交易明细与记录")
+    ]
     
+    # 第一行 2 个卡片
+    col1, col2 = st.columns(2)
+    with col1:
+        label, page_name = nav_items[0]
+        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
+        if st.button(label, key="btn_nav_1", type=btn_type, use_container_width=True):
+            st.session_state.current_menu = page_name
+            st.rerun()
+            
+    with col2:
+        label, page_name = nav_items[1]
+        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
+        if st.button(label, key="btn_nav_2", type=btn_type, use_container_width=True):
+            st.session_state.current_menu = page_name
+            st.rerun()
+
+    st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+
+    # 第二行 2 个卡片
+    col3, col4 = st.columns(2)
+    with col3:
+        label, page_name = nav_items[2]
+        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
+        if st.button(label, key="btn_nav_3", type=btn_type, use_container_width=True):
+            st.session_state.current_menu = page_name
+            st.rerun()
+            
+    with col4:
+        label, page_name = nav_items[3]
+        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
+        if st.button(label, key="btn_nav_4", type=btn_type, use_container_width=True):
+            st.session_state.current_menu = page_name
+            st.rerun()
+
+    menu = st.session_state.current_menu
+
     st.markdown("---")
     st.markdown("### 💾 数据库保存与备份")
     st.caption(f"存储位置：\n`{DB_FILE}`")
     
-    # 1. 导出/下载数据库备份文件
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "rb") as fp:
             st.download_button(
@@ -198,16 +243,15 @@ with st.sidebar:
                 use_container_width=True
             )
             
-    # 2. 上传还原历史数据库
     uploaded_db = st.file_uploader("📤 导入还原备份数据库 (.db)", type=["db"])
     if uploaded_db is not None:
         with open(DB_FILE, "wb") as f:
             f.write(uploaded_db.getbuffer())
-        st.success("✅ 数据恢复成功！页面即刻刷新...")
+        st.success("✅ 数据恢复成功！")
         st.rerun()
 
 # -----------------------------------------------------------------------------
-# 3. 核心数据汇总与逻辑计算
+# 4. 核心数据汇总与逻辑计算
 # -----------------------------------------------------------------------------
 COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
 COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
@@ -216,7 +260,6 @@ df_cap = load_capital()
 df_tx = load_tx()
 manual_prices = get_manual_prices()
 
-# 计算投入
 capital_summary = {'👦 男方': 0.0, '👧 女方': 0.0}
 if not df_cap.empty:
     for _, r in df_cap.iterrows():
@@ -228,7 +271,6 @@ if not df_cap.empty:
 
 total_capital = sum(capital_summary.values())
 
-# 计算持仓
 holdings = {}
 cash_spent = 0.0
 if not df_tx.empty:
@@ -266,11 +308,8 @@ df_portfolio = pd.DataFrame(portfolio)
 cash_balance = total_capital - cash_spent
 total_net_worth = cash_balance + total_assets_mv
 total_profit = total_net_worth - total_capital
-
-# 计算总体累计盈亏百分比
 profit_pct = (total_profit / total_capital * 100) if total_capital > 0 else 0.0
 
-# 情侣权益表
 equity_data = []
 for m in ['👦 男方', '👧 女方']:
     cap = capital_summary[m]
@@ -285,12 +324,11 @@ for m in ['👦 男方', '👧 女方']:
 df_equity = pd.DataFrame(equity_data)
 
 # -----------------------------------------------------------------------------
-# 4. 页面 1: 🍰 共享资金池总览
+# 5. 页面内容渲染
 # -----------------------------------------------------------------------------
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
-    # 顶部 4 个 KPI 卡片
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
@@ -299,9 +337,8 @@ if menu == "🍰 共享资金池总览":
     with k3:
         st.markdown(f'<div class="cute-card"><div class="cute-title">📈 标的总市值</div><div class="cute-value" style="color:#e76f51;">${total_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
     with k4:
-        profit_color = "#2a9d8f" if total_profit >= 0 else "#e76f51"  # 绿色代表赢，红色代表亏
+        profit_color = "#2a9d8f" if total_profit >= 0 else "#e76f51"
         pct_str = f"+{profit_pct:.2f}%" if total_profit >= 0 else f"{profit_pct:.2f}%"
-        
         st.markdown(f'''
             <div class="cute-card">
                 <div class="cute-title">✨ 累计盈亏</div>
@@ -318,14 +355,11 @@ if menu == "🍰 共享资金池总览":
         st.subheader("👩‍❤️‍👨 两人出资与权益份额")
         st.dataframe(df_equity, use_container_width=True, hide_index=True)
     with col_e2:
-        # 男方蓝色，女方粉色
         color_map_members = {'👦 男方': '#4EA8DE', '👧 女方': '#FF85A1'}
         fig_mem = px.pie(
             df_equity, values=[capital_summary['👦 男方'], capital_summary['👧 女方']], 
-            names=['👦 男方', '👧 女方'], hole=0.55,
-            color='成员',
-            color_discrete_map=color_map_members,
-            title="💕 本金出资比例"
+            names=['👦 男方', '👧 女方'], hole=0.55, color='成员',
+            color_discrete_map=color_map_members, title="💕 本金出资比例"
         )
         fig_mem.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#ffffff', width=3)))
         fig_mem.update_layout(showlegend=False, margin=dict(t=30, b=0, l=0, r=0))
@@ -359,7 +393,6 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 持仓标的概览
     st.subheader("📦 当前投资标的概览")
     if df_portfolio.empty:
         st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
@@ -368,15 +401,12 @@ if menu == "🍰 共享资金池总览":
         for idx, r in df_portfolio.iterrows():
             with c_list[idx % 3]:
                 is_profitable = r['profit'] >= 0
-                item_profit_color = "#2a9d8f" if is_profitable else "#e76f51"  # 绿涨红跌
-                
-                # 实时根据盈亏切换色卡背景和边框颜色
+                item_profit_color = "#2a9d8f" if is_profitable else "#e76f51"
                 card_bg = "#e8f5e9" if is_profitable else "#fff0f3"
                 card_border = "#2a9d8f" if is_profitable else "#ff758f"
                 
                 asset_pct = (r['mv'] / total_net_worth * 100) if total_net_worth > 0 else 0.0
                 asset_pct_str = f"+{asset_pct:.1f}%" if asset_pct >= 0 else f"{asset_pct:.1f}%"
-                
                 item_pct_str = f"+{r['profit_pct']:.2f}%" if is_profitable else f"{r['profit_pct']:.2f}%"
 
                 st.markdown(f"""
@@ -401,9 +431,6 @@ if menu == "🍰 共享资金池总览":
                 st.success("已更新价格！")
                 st.rerun()
 
-# -----------------------------------------------------------------------------
-# 5. 页面 2: 💵 资金存入/取出
-# -----------------------------------------------------------------------------
 elif menu == "💵 资金存入/取出":
     st.title("💵 个人资金入池 / 提取")
     with st.form("cap_form", clear_on_submit=True):
@@ -420,9 +447,6 @@ elif menu == "💵 资金存入/取出":
             st.success("已成功记录并更新资金池份额！")
             st.rerun()
 
-# -----------------------------------------------------------------------------
-# 6. 页面 3: 📈 买卖标的记账
-# -----------------------------------------------------------------------------
 elif menu == "📈 买卖标的记账":
     st.title("📈 资金池购买投资标的")
     st.info(f"💡 当前资金池剩余现金：**${cash_balance:,.2f}**")
@@ -451,9 +475,6 @@ elif menu == "📈 买卖标的记账":
                 st.success("记账成功！")
                 st.rerun()
 
-# -----------------------------------------------------------------------------
-# 7. 页面 4: 📜 交易明细与记录
-# -----------------------------------------------------------------------------
 elif menu == "📜 交易明细与记录":
     st.title("📜 交易明细与历史日志")
     st.markdown("在此处可以查看所有历史记账，进行**修改编辑**或**直接删除**，修改后所有图表和资产数据均会自动同步刷新。")
