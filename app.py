@@ -165,7 +165,7 @@ st.markdown("""
     
     /* 侧边栏单列大正方形卡片 */
     div[data-testid="stSidebar"] div.stButton > button {
-        height: 80px !important;
+        height: 300px !important;
         width: 100% !important;
         border-radius: 16px !important;
         font-size: 16px !important;
