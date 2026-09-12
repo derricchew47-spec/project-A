@@ -385,7 +385,7 @@ if menu == "🍰 共享资金池总览":
     # 核心新增与重构：永久投资组合 (已自动剔除 MMF 备用金)
     # -------------------------------------------------------------------------
     st.subheader("🏛️ 永久投资组合 (Permanent Portfolio)")
-    st.caption(f"💡 **再平衡独立计算机制**：已自动剔除紧急备用金 **${emergency_fund_mv:,.2f}，当前实际参与投资配置的总额为 ${investable_total_net_worth:,.2f}**。")
+    st.caption(f"💡 **再平衡独立计算机制**：已自动剔除紧急备用金 **${emergency_fund_mv:,.2f}**，当前实际参与投资配置的总额为 **${investable_total_net_worth:,.2f}**。")
 
     pp_stocks = 0.0    # 股票/指数 (25%)
     pp_bonds = 0.0     # 长期债券 (25%)
