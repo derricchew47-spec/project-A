@@ -142,7 +142,7 @@ def fetch_price(symbol, asset_type, default_price):
     return default_price
 
 # -----------------------------------------------------------------------------
-# 2. UI 主题与样式
+# 2. UI 主题与样式 (大幅增加卡片高度)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
@@ -162,23 +162,27 @@ st.markdown("""
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
     
-    /* 大号导航按钮样式调整 */
+    /* 大号正方形拉长卡片按钮样式 */
     div[data-testid="stSidebar"] div.stButton > button {
-        height: 85px !important;
+        height: 130px !important;            /* 高度从85调高至130 */
         width: 100% !important;
-        border-radius: 16px !important;
-        font-size: 15px !important;
-        font-weight: bold !important;
-        white-space: pre-wrap !important;
-        word-wrap: break-word !important;
-        line-height: 1.3 !important;
-        box-shadow: 0 4px 12px rgba(255, 182, 193, 0.2);
+        border-radius: 20px !important;
+        font-size: 14px !important;
+        font-weight: 700 !important;
+        white-space: pre-line !important;     /* 严格换行 */
+        word-break: break-all !important;
+        line-height: 1.4 !important;
+        padding: 10px 4px !important;
+        box-shadow: 0 6px 16px rgba(255, 182, 193, 0.25);
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 3. 侧边栏：大号正方形 (2x2) 卡片导航
+# 3. 侧边栏：大号拉长正方形 (2x2) 卡片导航
 # -----------------------------------------------------------------------------
 if 'current_menu' not in st.session_state:
     st.session_state.current_menu = "🍰 共享资金池总览"
@@ -186,14 +190,15 @@ if 'current_menu' not in st.session_state:
 with st.sidebar:
     st.markdown("### 🌸 导航菜单")
     
+    # 将 Icon 与标题竖向排列，保证完美显示不挤压
     nav_items = [
-        ("🍰 共享资金池\n总览", "🍰 共享资金池总览"),
-        ("💵 资金存入\n与取出", "💵 资金存入/取出"),
-        ("📈 买卖标的\n记账", "📈 买卖标的记账"),
-        ("📜 交易明细\n与日志", "📜 交易明细与记录")
+        ("🍰\n共享资金池\n总览", "🍰 共享资金池总览"),
+        ("💵\n资金存入\n与取出", "💵 资金存入/取出"),
+        ("📈\n买卖标的\n记账", "📈 买卖标的记账"),
+        ("📜\n交易明细\n与日志", "📜 交易明细与记录")
     ]
     
-    # 第一行 2 个卡片
+    # 第一行 2 个正方形大卡片
     col1, col2 = st.columns(2)
     with col1:
         label, page_name = nav_items[0]
@@ -209,9 +214,9 @@ with st.sidebar:
             st.session_state.current_menu = page_name
             st.rerun()
 
-    st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
-    # 第二行 2 个卡片
+    # 第二行 2 个正方形大卡片
     col3, col4 = st.columns(2)
     with col3:
         label, page_name = nav_items[2]
