@@ -4,11 +4,14 @@ import plotly.express as px
 import sqlite3
 from datetime import datetime
 import yfinance as yf
+import os
 
 # -----------------------------------------------------------------------------
-# 1. 数据库与核心数据处理
+# 1. 数据库路径锁定 (解决找不到文件与数据清零问题)
 # -----------------------------------------------------------------------------
-DB_FILE = "portfolio_pool_cute.db"
+# 自动锁定当前代码运行的文件路径，确保数据库固定保存在程序同级目录下
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "portfolio_pool_cute.db")
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -140,7 +143,7 @@ def fetch_price(symbol, asset_type, default_price):
     return default_price
 
 # -----------------------------------------------------------------------------
-# 2. UI 主题配置
+# 2. UI 主题与卡片导航配置
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
@@ -159,17 +162,55 @@ st.markdown("""
     }
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
+    
+    /* 调整分割控制/卡片导航按钮的样式 */
+    div[data-testid="stSegmentedControl"] {
+        width: 100%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# 资产分类与平台饼图配色
-COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
-COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
+# 侧边栏：卡片导航模式 & 数据管理
+with st.sidebar:
+    st.markdown("### 🌸 导航菜单")
+    menu_options = ["🍰 共享资金池总览", "💵 资金存入/取出", "📈 买卖标的记账", "📜 交易明细与记录"]
+    
+    # 卡片分段控制器导航（现代选项卡样式）
+    menu = st.segmented_control(
+        "切换功能页面",
+        menu_options,
+        default=menu_options[0],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    st.markdown("### 💾 数据库保存与备份")
+    st.caption(f"存储位置：\n`{DB_FILE}`")
+    
+    # 1. 导出/下载数据库备份文件
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "rb") as fp:
+            st.download_button(
+                label="📥 备份并下载数据库",
+                data=fp,
+                file_name=f"portfolio_backup_{datetime.now().strftime('%Y%m%d')}.db",
+                mime="application/x-sqlite3",
+                use_container_width=True
+            )
+            
+    # 2. 上传还原历史数据库
+    uploaded_db = st.file_uploader("📤 导入还原备份数据库 (.db)", type=["db"])
+    if uploaded_db is not None:
+        with open(DB_FILE, "wb") as f:
+            f.write(uploaded_db.getbuffer())
+        st.success("✅ 数据恢复成功！页面即刻刷新...")
+        st.rerun()
 
 # -----------------------------------------------------------------------------
 # 3. 核心数据汇总与逻辑计算
 # -----------------------------------------------------------------------------
-menu = st.sidebar.radio("✨ 导航菜单", ["🍰 共享资金池总览", "💵 资金存入/取出", "📈 买卖标的记账", "📜 交易明细与记录"])
+COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
+COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
 
 df_cap = load_capital()
 df_tx = load_tx()
@@ -318,7 +359,7 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # 持仓标的概览 (色卡颜色与百分比完全根据盈亏变动)
+    # 持仓标的概览
     st.subheader("📦 当前投资标的概览")
     if df_portfolio.empty:
         st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
@@ -359,27 +400,6 @@ if menu == "🍰 共享资金池总览":
                 update_manual_price(selected_key, new_v)
                 st.success("已更新价格！")
                 st.rerun()
-
-    st.markdown("---")
-
-    st.subheader("⚖️ 智能调仓建议 (永久投资组合 25%)")
-    perm_map = {"股票/ETF": "股票", "黄金/贵金属": "黄金", "货币基金/现金": "现金", "加密货币": "股票", "其他": "现金"}
-    df_all['category'] = df_all['type'].map(perm_map)
-    perm_df = df_all.groupby('category')['mv'].sum().reset_index()
-
-    for c in ["股票", "黄金", "现金", "债券"]:
-        if c not in perm_df['category'].tolist():
-            perm_df = pd.concat([perm_df, pd.DataFrame([{'category': c, 'mv': 0.0}])], ignore_index=True)
-
-    perm_df['target'] = total_net_worth * 0.25
-    perm_df['diff'] = perm_df['target'] - perm_df['mv']
-    
-    reb_list = []
-    for _, r in perm_df.iterrows():
-        action = f"🟢 买入 ${r['diff']:,.2f}" if r['diff'] > 0 else (f"🔴 卖出 ${abs(r['diff']):,.2f}" if r['diff'] < 0 else "✅ 完美")
-        reb_list.append({'类别': r['category'], '当前市值': f"${r['mv']:,.2f}", '目标市值 (25%)': f"${r['target']:,.2f}", '建议操作': action})
-    
-    st.dataframe(pd.DataFrame(reb_list), use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
 # 5. 页面 2: 💵 资金存入/取出
