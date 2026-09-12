@@ -131,7 +131,7 @@ def get_manual_prices():
 
 @st.cache_data(ttl=300)
 def fetch_price(symbol, asset_type, default_price):
-    if asset_type in ["股票/ETF", "加密货币"] and symbol:
+    if asset_type in ["股票/ETF", "债券/国债", "加密货币"] and symbol:
         try:
             ticker = yf.Ticker(symbol)
             fast_info = ticker.fast_info
@@ -142,12 +142,11 @@ def fetch_price(symbol, asset_type, default_price):
     return default_price
 
 # -----------------------------------------------------------------------------
-# 2. UI 主题与样式 (大幅增加卡片高度)
+# 2. UI 主题与样式 (保持可爱粉色卡片风格)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
 
-# 1. 替换 CSS 样式部分
 st.markdown("""
 <style>
     .stApp { background-color: #fcf8f9; }
@@ -163,20 +162,35 @@ st.markdown("""
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
     
-    /* 侧边栏单列大正方形卡片 */
-    div[data-testid="stSidebar"] div.stButton > button {
-        height: 300px !important;
+    /* 侧边栏卡片按钮样式 */
+    section[data-testid="stSidebar"] div.stButton > button {
+        height: 80px !important;
         width: 100% !important;
         border-radius: 16px !important;
-        font-size: 16px !important;
+        font-size: 15px !important;
         font-weight: 700 !important;
         margin-bottom: 8px !important;
         box-shadow: 0 4px 12px rgba(255, 182, 193, 0.2);
     }
+    
+    /* 永久组合 4 大分类卡片样式 */
+    .pp-card {
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 16px;
+        border: 2px solid #ffe6ea;
+        box-shadow: 0 4px 15px rgba(255, 182, 193, 0.12);
+        height: 100%;
+    }
+    .pp-header { font-size: 16px; font-weight: 800; color: #ff5c8a; margin-bottom: 8px; }
+    .pp-stat { font-size: 20px; font-weight: 800; color: #4a4a4a; }
+    .pp-sub { font-size: 12px; color: #888; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. 替换侧边栏导航部分
+# -----------------------------------------------------------------------------
+# 3. 侧边栏导航
+# -----------------------------------------------------------------------------
 if 'current_menu' not in st.session_state:
     st.session_state.current_menu = "🍰 共享资金池总览"
 
@@ -197,6 +211,7 @@ with st.sidebar:
             st.rerun()
 
     menu = st.session_state.current_menu
+
     st.markdown("---")
     st.markdown("### 💾 数据库保存与备份")
     st.caption(f"存储位置：\n`{DB_FILE}`")
@@ -361,35 +376,129 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    st.subheader("📦 当前投资标的概览")
-    if df_portfolio.empty:
-        st.info("💡 目前池子里都是现金哦，还没有买入任何投资标的～")
-    else:
-        c_list = st.columns(3)
-        for idx, r in df_portfolio.iterrows():
-            with c_list[idx % 3]:
-                is_profitable = r['profit'] >= 0
-                item_profit_color = "#2a9d8f" if is_profitable else "#e76f51"
-                card_bg = "#e8f5e9" if is_profitable else "#fff0f3"
-                card_border = "#2a9d8f" if is_profitable else "#ff758f"
-                
-                asset_pct = (r['mv'] / total_net_worth * 100) if total_net_worth > 0 else 0.0
-                asset_pct_str = f"+{asset_pct:.1f}%" if asset_pct >= 0 else f"{asset_pct:.1f}%"
-                item_pct_str = f"+{r['profit_pct']:.2f}%" if is_profitable else f"{r['profit_pct']:.2f}%"
+    # -------------------------------------------------------------------------
+    # 核心新增板块：永久投资组合 (Permanent Portfolio 25/25/25/25) 概览与再平衡
+    # -------------------------------------------------------------------------
+    st.subheader("🏛️ 永久投资组合概览 (Permanent Portfolio)")
 
+    # 1. 资产归类映射
+    pp_stocks = 0.0    # 股票/指数 (25%)
+    pp_bonds = 0.0     # 长期债券 (25%)
+    pp_gold = 0.0      # 黄金/贵金属 (25%)
+    pp_cash = cash_balance  # 现金/货币基金 (25%)
+
+    # 保存各板块内部标的列表，方便展示
+    items_by_cat = {'stocks': [], 'bonds': [], 'gold': [], 'cash': []}
+
+    if not df_portfolio.empty:
+        for _, r in df_portfolio.iterrows():
+            t = r['type']
+            mv = r['mv']
+            if t == "股票/ETF":
+                pp_stocks += mv
+                items_by_cat['stocks'].append(r)
+            elif t == "债券/国债":
+                pp_bonds += mv
+                items_by_cat['bonds'].append(r)
+            elif t == "黄金/贵金属":
+                pp_gold += mv
+                items_by_cat['gold'].append(r)
+            else:  # 货币基金/现金 或 加密货币/其他
+                pp_cash += mv
+                items_by_cat['cash'].append(r)
+
+    # 2. 计算各分类的实际占比与再平衡差额
+    cat_names = ["📈 股票/指数", "📜 长期债券", "🥇 黄金/贵金属", "💵 现金/货币基金"]
+    mvs = [pp_stocks, pp_bonds, pp_gold, pp_cash]
+    keys = ['stocks', 'bonds', 'gold', 'cash']
+    
+    target_pct = 25.0
+    summary_rows = []
+
+    for name, mv, key in zip(cat_names, mvs, keys):
+        curr_pct = (mv / total_net_worth * 100) if total_net_worth > 0 else 0.0
+        target_mv = total_net_worth * 0.25
+        diff_mv = target_mv - mv  # 正数表示需要买入补足，负数表示需要卖出调平
+        
+        # 触发再平衡门槛：通常偏离目标大于 5%（即占比低于 20% 或高于 30%）
+        if curr_pct > 30.0:
+            status = "⚠️ 占比偏高 (建议卖出/减仓)"
+            status_color = "#e76f51"
+        elif curr_pct < 20.0 and total_net_worth > 0:
+            status = "💡 占比偏低 (建议买入/加仓)"
+            status_color = "#2a9d8f"
+        else:
+            status = "✅ 处于平衡区间"
+            status_color = "#4a4a4a"
+
+        summary_rows.append({
+            'cat_name': name, 'mv': mv, 'pct': curr_pct,
+            'target_pct': target_pct, 'diff_mv': diff_mv,
+            'status': status, 'status_color': status_color, 'key': key
+        })
+
+    # --- 总体占比与再平衡决策看板 (Overall Summary) ---
+    st.markdown("##### 📊 总体占比与再平衡决策 (Overall Summary)")
+    
+    # 渲染 4 个核心分类总计卡片
+    p_cols = st.columns(4)
+    for idx, s in enumerate(summary_rows):
+        with p_cols[idx]:
+            diff_str = f"+${s['diff_mv']:,.2f} (需要加仓)" if s['diff_mv'] > 0 else f"-${abs(s['diff_mv']):,.2f} (需要减仓)"
+            st.markdown(f"""
+            <div class="pp-card">
+                <div class="pp-header">{s['cat_name']}</div>
+                <div class="pp-stat">{s['pct']:.1f}% <span style="font-size:12px; color:#888; font-weight:normal;">/ 目标 25%</span></div>
+                <div class="pp-sub">当前总额: ${s['mv']:,.2f}</div>
+                <div style="font-size:12px; font-weight:700; color:{s['status_color']}; background:#fff5f7; padding:6px; border-radius:8px; text-align:center;">
+                    {s['status']}<br>
+                    <span style="font-size:11px; font-weight:normal; color:#666;">调平差额: {diff_str}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+
+    # --- 各板块具体持仓明细折叠展示 ---
+    st.markdown("##### 📦 永久组合各分类下的具体持仓")
+    c1, c2, c3, c4 = st.columns(4)
+    
+    columns_map = [c1, c2, c3, c4]
+    for idx, s in enumerate(summary_rows):
+        with columns_map[idx]:
+            items = items_by_cat[s['key']]
+            if s['key'] == 'cash' and cash_balance > 0:
                 st.markdown(f"""
-                <div style="background:{card_bg}; border-radius:12px; padding:12px; border-left:5px solid {card_border}; margin-bottom:8px;">
-                    <div style="display:flex; justify-content:space-between; font-weight:700;">
-                        <span>{r['name']} ({r['plat']})</span>
-                        <span>${r['mv']:,.2f} <span style="font-size:12px; font-weight:600; color:{item_profit_color};">({asset_pct_str})</span></span>
-                    </div>
-                    <div style="font-size:12px; color:#666; margin-top:4px;">
-                        数量: {r['qty']:.2f} | 现价: ${r['price']:.2f} | 盈亏: <b style="color:{item_profit_color};">${r['profit']:,.2f} ({item_pct_str})</b>
-                    </div>
+                <div style="background:#f8f9fa; border-radius:10px; padding:10px; border-left:4px solid #2a9d8f; margin-bottom:8px; font-size:13px;">
+                    <b>💰 资金池未分配现金</b><br>
+                    金额: <b>${cash_balance:,.2f}</b>
                 </div>
                 """, unsafe_allow_html=True)
 
-        with st.expander("⚙️ 手动更新净值/单价 (如 TNG 黄金 / MooMoo 货币基金)"):
+            if not items:
+                st.caption("暂无持仓")
+            else:
+                for r in items:
+                    is_profitable = r['profit'] >= 0
+                    item_profit_color = "#2a9d8f" if is_profitable else "#e76f51"
+                    card_bg = "#ffffff"
+                    card_border = "#2a9d8f" if is_profitable else "#ff758f"
+                    item_pct_str = f"+{r['profit_pct']:.2f}%" if is_profitable else f"{r['profit_pct']:.2f}%"
+
+                    st.markdown(f"""
+                    <div style="background:{card_bg}; border-radius:10px; padding:10px; border-left:4px solid {card_border}; margin-bottom:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                        <div style="font-size:13px; font-weight:700;">{r['name']} ({r['plat']})</div>
+                        <div style="font-size:13px; color:#ff5c8a; font-weight:800; margin-top:2px;">${r['mv']:,.2f}</div>
+                        <div style="font-size:11px; color:#777; margin-top:2px;">
+                            持仓: {r['qty']:.2f} | 现价: ${r['price']:.2f}<br>
+                            盈亏: <b style="color:{item_profit_color};">${r['profit']:,.2f} ({item_pct_str})</b>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    # 手动更新净值展开框
+    with st.expander("⚙️ 手动更新标的净值/单价 (如黄金 / 货币基金)"):
+        if not df_portfolio.empty:
             m_col1, m_col2, m_col3 = st.columns(3)
             selected_key = m_col1.selectbox("选择标的", df_portfolio['key'].tolist())
             curr_v = manual_prices.get(selected_key, float(df_portfolio[df_portfolio['key']==selected_key]['price'].iloc[0]))
@@ -421,13 +530,13 @@ elif menu == "📈 买卖标的记账":
     with st.form("tx_form", clear_on_submit=True):
         t1, t2, t3 = st.columns(3)
         with t1:
-            asset_type = st.selectbox("资产类型", ["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"])
+            asset_type = st.selectbox("资产类型 (对应永久组合分类)", ["股票/ETF", "债券/国债", "黄金/贵金属", "货币基金/现金", "加密货币/其他"])
             tx_type = st.selectbox("交易类型", ["买入", "卖出"])
             date_val = st.date_input("日期", datetime.now())
         with t2:
             platform = st.text_input("投资平台", placeholder="如: TNG e-Mas, MooMoo")
-            name = st.text_input("标的名称", placeholder="如: TNG 黄金, Maybank MMF")
-            symbol = st.text_input("代码 (选填)", placeholder="美股填写代码如 AAPL")
+            name = st.text_input("标的名称", placeholder="如: 美股VT, TLT债券, TNG黄金")
+            symbol = st.text_input("代码 (选填)", placeholder="美股填写代码如 VT, TLT")
         with t3:
             price = st.number_input("单价", min_value=0.0001, value=1.0000, format="%.4f")
             quantity = st.number_input("数量 / 份额", min_value=0.0001, value=1.0000, format="%.4f")
@@ -501,7 +610,7 @@ elif menu == "📜 交易明细与记录":
 
             with st.form("edit_tx_form"):
                 et1, et2, et3 = st.columns(3)
-                asset_options = ["股票/ETF", "黄金/贵金属", "货币基金/现金", "加密货币", "其他"]
+                asset_options = ["股票/ETF", "债券/国债", "黄金/贵金属", "货币基金/现金", "加密货币/其他"]
                 with et1:
                     e_asset_type = st.selectbox("资产类型", asset_options, index=asset_options.index(row_tx['asset_type']) if row_tx['asset_type'] in asset_options else 0)
                     e_tx_type = st.selectbox("交易类型", ["买入", "卖出"], index=0 if row_tx['tx_type']=="买入" else 1)
