@@ -147,6 +147,7 @@ def fetch_price(symbol, asset_type, default_price):
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
 
+# 1. 替换 CSS 样式部分
 st.markdown("""
 <style>
     .stApp { background-color: #fcf8f9; }
@@ -162,78 +163,40 @@ st.markdown("""
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
     .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
     
-    /* 大号正方形拉长卡片按钮样式 */
+    /* 侧边栏单列大正方形卡片 */
     div[data-testid="stSidebar"] div.stButton > button {
-        height: 1000px !important;            /* 高度从85调高至130 */
+        height: 80px !important;
         width: 100% !important;
-        border-radius: 20px !important;
-        font-size: 14px !important;
+        border-radius: 16px !important;
+        font-size: 16px !important;
         font-weight: 700 !important;
-        white-space: pre-line !important;     /* 严格换行 */
-        word-break: break-all !important;
-        line-height: 1.4 !important;
-        padding: 10px 4px !important;
-        box-shadow: 0 6px 16px rgba(255, 182, 193, 0.25);
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+        margin-bottom: 8px !important;
+        box-shadow: 0 4px 12px rgba(255, 182, 193, 0.2);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 3. 侧边栏：大号拉长正方形 (2x2) 卡片导航
-# -----------------------------------------------------------------------------
+# 2. 替换侧边栏导航部分
 if 'current_menu' not in st.session_state:
     st.session_state.current_menu = "🍰 共享资金池总览"
 
 with st.sidebar:
     st.markdown("### 🌸 导航菜单")
     
-    # 将 Icon 与标题竖向排列，保证完美显示不挤压
     nav_items = [
-        ("🍰\n共享资金池\n总览", "🍰 共享资金池总览"),
-        ("💵\n资金存入\n与取出", "💵 资金存入/取出"),
-        ("📈\n买卖标的\n记账", "📈 买卖标的记账"),
-        ("📜\n交易明细\n与日志", "📜 交易明细与记录")
+        ("🍰  共享资金池总览", "🍰 共享资金池总览"),
+        ("💵  资金存入与取出", "💵 资金存入/取出"),
+        ("📈  买卖标的记账", "📈 买卖标的记账"),
+        ("📜  交易明细与日志", "📜 交易明细与记录")
     ]
     
-    # 第一行 2 个正方形大卡片
-    col1, col2 = st.columns(2)
-    with col1:
-        label, page_name = nav_items[0]
+    for label, page_name in nav_items:
         btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
-        if st.button(label, key="btn_nav_1", type=btn_type, use_container_width=True):
-            st.session_state.current_menu = page_name
-            st.rerun()
-            
-    with col2:
-        label, page_name = nav_items[1]
-        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
-        if st.button(label, key="btn_nav_2", type=btn_type, use_container_width=True):
-            st.session_state.current_menu = page_name
-            st.rerun()
-
-    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-
-    # 第二行 2 个正方形大卡片
-    col3, col4 = st.columns(2)
-    with col3:
-        label, page_name = nav_items[2]
-        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
-        if st.button(label, key="btn_nav_3", type=btn_type, use_container_width=True):
-            st.session_state.current_menu = page_name
-            st.rerun()
-            
-    with col4:
-        label, page_name = nav_items[3]
-        btn_type = "primary" if st.session_state.current_menu == page_name else "secondary"
-        if st.button(label, key="btn_nav_4", type=btn_type, use_container_width=True):
+        if st.button(label, key=f"btn_{page_name}", type=btn_type, use_container_width=True):
             st.session_state.current_menu = page_name
             st.rerun()
 
     menu = st.session_state.current_menu
-
     st.markdown("---")
     st.markdown("### 💾 数据库保存与备份")
     st.caption(f"存储位置：\n`{DB_FILE}`")
