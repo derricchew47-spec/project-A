@@ -328,16 +328,16 @@ if menu == "🍰 共享资金池总览":
     k1, k2, k3, k4, k5 = st.columns(5)
     
     with k1:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
     
     with k2:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">💵 未分配投资现金</div><div class="cute-value" style="color:#2a9d8f;">${cash_balance:,.2f}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cute-card"><div class="cute-title">💵 未分配</div><div class="cute-value" style="color:#2a9d8f;">${cash_balance:,.2f}</div></div>', unsafe_allow_html=True)
     
     with k3:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">🛡️ 紧急备用金 (MMF)</div><div class="cute-value" style="color:#e9c46a;">${emergency_fund_mv:,.2f}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cute-card"><div class="cute-title">🛡️ 紧急备用金</div><div class="cute-value" style="color:#e9c46a;">${emergency_fund_mv:,.2f}</div></div>', unsafe_allow_html=True)
     
     with k4:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">📈 已投资标的总额</div><div class="cute-value" style="color:#ff5c8a;">${invested_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cute-card"><div class="cute-title">📈 已投资标</div><div class="cute-value" style="color:#ff5c8a;">${invested_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
     
     with k5:
         profit_color = "#2a9d8f" if total_profit >= 0 else "#e76f51"
