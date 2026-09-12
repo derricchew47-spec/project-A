@@ -4,10 +4,11 @@ import plotly.express as px
 import sqlite3
 from datetime import datetime
 import yfinance as yf
+import numpy as np
 import os
 
 # -----------------------------------------------------------------------------
-# 1. 数据库路径锁定
+# 1. 数据库初始化与基础操作
 # -----------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "portfolio_pool_cute.db")
@@ -129,6 +130,9 @@ def get_manual_prices():
     conn.close()
     return dict(zip(df['symbol_or_name'], df['last_price']))
 
+# -----------------------------------------------------------------------------
+# 2. 实时行情与 ATR 止损止盈量化算法 (带缓存防卡顿)
+# -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_price(symbol, asset_type, default_price):
     if asset_type in ["股票/ETF", "债券/国债", "加密货币"] and symbol:
@@ -141,8 +145,47 @@ def fetch_price(symbol, asset_type, default_price):
             pass
     return default_price
 
+@st.cache_data(ttl=900)  # 15分钟缓存，零卡顿
+def calculate_auto_trading_signals(symbol: str, risk_reward_ratio: float = 2.0):
+    """自动获取股票数据并计算：较优买点、ATR止损点、止盈点"""
+    if not symbol or not symbol.strip():
+        return None
+    try:
+        ticker = yf.Ticker(symbol.strip())
+        df = ticker.history(period="60d")
+        if df.empty or len(df) < 20:
+            return None
+        
+        current_price = float(df['Close'].iloc[-1])
+        
+        # 计算 ATR (14日真实波动幅度均值)
+        df['High-Low'] = df['High'] - df['Low']
+        df['High-Close'] = np.abs(df['High'] - df['Close'].shift(1))
+        df['Low-Close'] = np.abs(df['Low'] - df['Close'].shift(1))
+        df['TR'] = df[['High-Low', 'High-Close', 'Low-Close']].max(axis=1)
+        atr = float(df['TR'].rolling(window=14).mean().iloc[-1])
+        
+        # 计算 20日布林带下轨 (超卖区参考买点)
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['STD20'] = df['Close'].rolling(window=20).std()
+        lower_band = float(df['MA20'].iloc[-1] - (2 * df['STD20'].iloc[-1]))
+        
+        good_buy_price = min(current_price, lower_band)
+        stop_loss_atr = current_price - (2 * atr)
+        take_profit_atr = current_price + (2 * atr * risk_reward_ratio)
+
+        return {
+            "current_price": round(current_price, 2),
+            "good_buy_price": round(good_buy_price, 2),
+            "stop_loss": round(stop_loss_atr, 2),
+            "take_profit": round(take_profit_atr, 2),
+            "atr": round(atr, 2)
+        }
+    except Exception:
+        return None
+
 # -----------------------------------------------------------------------------
-# 2. UI 主题与样式
+# 3. UI 主题与 CSS 样式 (固定大高度卡片)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="🌸 Our Money Pool", layout="wide", initial_sidebar_state="expanded")
 init_db()
@@ -150,21 +193,23 @@ init_db()
 st.markdown("""
 <style>
     .stApp { background-color: #fcf8f9; }
+    
+    /* 锁定卡片固定高度与 Flex 垂直居中 */
     .cute-card {
         background: #ffffff;
         border-radius: 18px;
-        padding: 16px;
+        padding: 14px;
         box-shadow: 0 8px 20px rgba(255, 182, 193, 0.15);
         border: 2px solid #ffe6ea;
         text-align: center;
-        height: 125px !important;            /* 强制锁定固定大高度 */
+        height: 125px !important;
         display: flex;
         flex-direction: column;
-        justify-content: center;             /* 垂直居中对齐 */
-        align-items: center;                 /* 水平居中对齐 */
+        justify-content: center;
+        align-items: center;
     }
     .cute-title { font-size: 13px; color: #887880; font-weight: 600; }
-    .cute-value { font-size: 22px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
+    .cute-value { font-size: 21px; font-weight: 800; color: #ff5c8a; margin-top: 4px; }
     
     section[data-testid="stSidebar"] div.stButton > button {
         height: 80px !important;
@@ -191,7 +236,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 3. 侧边栏导航与备份
+# 4. 侧边栏导航与备份
 # -----------------------------------------------------------------------------
 if 'current_menu' not in st.session_state:
     st.session_state.current_menu = "🍰 共享资金池总览"
@@ -200,7 +245,7 @@ with st.sidebar:
     st.markdown("### 🌸 导航菜单")
     nav_items = [
         ("🍰  共享资金池总览", "🍰 共享资金池总览"),
-        ("💵  资金存入与取出", "💵 资金存入/取出"),
+        ("💵  资金存入与归桶", "💵 资金存入/归桶"),
         ("📈  买卖标的记账", "📈 买卖标的记账"),
         ("📜  交易明细与日志", "📜 交易明细与记录")
     ]
@@ -234,7 +279,7 @@ with st.sidebar:
         st.rerun()
 
 # -----------------------------------------------------------------------------
-# 4. 核心数据汇总与逻辑计算
+# 5. 核心数据汇总与逻辑计算
 # -----------------------------------------------------------------------------
 COLORS_ASSETS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
 COLORS_PLATFORMS = ['#A8DADC', '#F4A261', '#E76F51', '#2A9D8F', '#E9C46A']
@@ -244,13 +289,32 @@ df_tx = load_tx()
 manual_prices = get_manual_prices()
 
 capital_summary = {'👦 男方': 0.0, '👧 女方': 0.0}
+bucket_totals = {
+    "✈️ 旅游专项基金": 0.0,
+    "🚗 车辆维修/Service": 0.0,
+    "🎉 娱乐与日常消费": 0.0,
+    "📦 其他专项预留": 0.0
+}
+
 if not df_cap.empty:
     for _, r in df_cap.iterrows():
         m, amt = r['member'], r['amount']
+        notes_str = str(r['notes'])
+        
+        # 本金总出资
         if r['type'] in ['注资/存入本金', '存入']:
             capital_summary[m] += amt
         elif r['type'] in ['撤资/提取本金', '取出']:
             capital_summary[m] -= amt
+            
+        # 专项桶统计
+        for b_key in bucket_totals.keys():
+            keyword = b_key.split(" ")[1] if " " in b_key else b_key
+            if keyword in notes_str:
+                if r['type'] in ['注资/存入本金', '存入']:
+                    bucket_totals[b_key] += amt
+                elif r['type'] in ['撤资/提取本金', '取出']:
+                    bucket_totals[b_key] -= amt
 
 total_capital = sum(capital_summary.values())
 
@@ -289,7 +353,7 @@ for k, item in holdings.items():
         profit = mv - item['cost']
         profit_pct = (profit / item['cost'] * 100) if item['cost'] > 0 else 0.0
         portfolio.append({
-            'key': k, 'name': item['name'], 'type': item['type'], 'plat': item['plat'],
+            'key': k, 'name': item['name'], 'symbol': item['symbol'], 'type': item['type'], 'plat': item['plat'],
             'qty': item['qty'], 'price': cp, 'cost': item['cost'], 'mv': mv, 'profit': profit, 'profit_pct': profit_pct
         })
 
@@ -299,7 +363,10 @@ total_net_worth = cash_balance + total_assets_mv
 total_profit = total_net_worth - total_capital
 profit_pct = (total_profit / total_capital * 100) if total_capital > 0 else 0.0
 
-# 计算剔除“紧急备用金”后的实际投资总池大小 (用于 25% 永久组合计算)
+# 纯已投资标的总市值 (剔除备用金)
+invested_assets_mv = total_assets_mv - emergency_fund_mv
+
+# 可参与 25% 永久组合再平衡的实际投资池总额
 investable_total_net_worth = total_net_worth - emergency_fund_mv
 
 equity_data = []
@@ -316,41 +383,45 @@ for m in ['👦 男方', '👧 女方']:
 df_equity = pd.DataFrame(equity_data)
 
 # -----------------------------------------------------------------------------
-# 5. 页面内容渲染
+# 6. 页面渲染
 # -----------------------------------------------------------------------------
 if menu == "🍰 共享资金池总览":
     st.title("🌸 小情侣的资金池资产看板")
     
-# 计算实际已投资标的总市值 (剔除备用金 MMF 后的纯投资标的)
-    invested_assets_mv = total_assets_mv - emergency_fund_mv
-
-    # 渲染顶栏核心卡片
+    # 5 个固定大高度顶栏卡片
     k1, k2, k3, k4, k5 = st.columns(5)
-    
     with k1:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
-    
+        st.markdown(f'<div class="cute-card"><div class="cute-title">🏦 资金池总资产</div><div class="cute-value">${total_net_worth:,.2f}</div></div>', unsafe_allow_html=True)
     with k2:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">💵 未分配</div><div class="cute-value" style="color:#2a9d8f;">${cash_balance:,.2f}</div></div>', unsafe_allow_html=True)
-    
+        st.markdown(f'<div class="cute-card"><div class="cute-title">💵 未分配投资现金</div><div class="cute-value" style="color:#2a9d8f;">${cash_balance:,.2f}</div></div>', unsafe_allow_html=True)
     with k3:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">🛡️ 紧急备用金</div><div class="cute-value" style="color:#e9c46a;">${emergency_fund_mv:,.2f}</div></div>', unsafe_allow_html=True)
-    
+        st.markdown(f'<div class="cute-card"><div class="cute-title">🛡️ 紧急备用金 (MMF)</div><div class="cute-value" style="color:#e9c46a;">${emergency_fund_mv:,.2f}</div></div>', unsafe_allow_html=True)
     with k4:
-        st.markdown(f'<div class="cute-card"><div class="cute-title">📈 已投资标</div><div class="cute-value" style="color:#ff5c8a;">${invested_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
-    
+        st.markdown(f'<div class="cute-card"><div class="cute-title">📈 已投资标的总额</div><div class="cute-value" style="color:#ff5c8a;">${invested_assets_mv:,.2f}</div></div>', unsafe_allow_html=True)
     with k5:
         profit_color = "#2a9d8f" if total_profit >= 0 else "#e76f51"
         pct_str = f"+{profit_pct:.2f}%" if total_profit >= 0 else f"{profit_pct:.2f}%"
         st.markdown(f'''
             <div class="cute-card">
                 <div class="cute-title">✨ 累计盈亏</div>
-                <div class="cute-value" style="color:{profit_color}; font-size: 20px;">
-                    ${total_profit:,.2f}
-                </div>
-                <div style="font-size:12px; font-weight:700; color:{profit_color}; margin-top: 2px;">({pct_str})</div>
+                <div class="cute-value" style="color:{profit_color}; font-size:19px;">${total_profit:,.2f}</div>
+                <div style="font-size:12px; font-weight:700; color:{profit_color}; margin-top:2px;">({pct_str})</div>
             </div>
         ''', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # 🪣 专项储蓄与消费桶看板
+    st.markdown("##### 🪣 专项储蓄与消费桶 (预留预算，不干扰投资再平衡)")
+    b_cols = st.columns(4)
+    for idx, (b_name, b_val) in enumerate(bucket_totals.items()):
+        with b_cols[idx]:
+            st.markdown(f"""
+            <div class="cute-card" style="height: 100px !important;">
+                <div class="cute-title">{b_name}</div>
+                <div class="cute-value" style="font-size: 18px; color: #4a4a4a;">${b_val:,.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -397,20 +468,20 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("---")
 
-    # -------------------------------------------------------------------------
-    # 核心新增与重构：永久投资组合 (已自动剔除 MMF 备用金)
-    # -------------------------------------------------------------------------
+    # 🏛️ 永久投资组合
     st.subheader("🏛️ 永久投资组合 (Permanent Portfolio)")
+    
+    # 高亮且无乱码的自定义提示框
     st.markdown(f"""
     <div style="background-color: #fff0f3; border-left: 4px solid #ff5c8a; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; color: #555;">
         💡 <b>再平衡独立计算机制</b>：已自动剔除紧急备用金 <b style="font-size: 16px; color: #e76f51;">${emergency_fund_mv:,.2f}</b>，当前实际参与投资配置的总额为 <b style="font-size: 16px; color: #2a9d8f;">${investable_total_net_worth:,.2f}</b>。
     </div>
     """, unsafe_allow_html=True)
 
-    pp_stocks = 0.0    # 股票/指数 (25%)
-    pp_bonds = 0.0     # 长期债券 (25%)
-    pp_gold = 0.0      # 黄金/贵金属 (25%)
-    pp_cash = cash_balance  # 投资流动性现金 (25%)
+    pp_stocks = 0.0
+    pp_bonds = 0.0
+    pp_gold = 0.0
+    pp_cash = cash_balance
 
     items_by_cat = {'stocks': [], 'bonds': [], 'gold': [], 'cash': []}
 
@@ -430,16 +501,12 @@ if menu == "🍰 共享资金池总览":
             elif t == "货币基金/现金":
                 pp_cash += mv
                 items_by_cat['cash'].append(r)
-            # 💡 注意：🛡️ 紧急备用金 (MMF) 被自动忽略，不存入任何投资分类
 
-    # 2. 计算各分类在“可投资额”中的占比与差额
     cat_names = ["📈 股票/指数", "📜 长期债券", "🥇 黄金/贵金属", "💵 现金/货币"]
     mvs = [pp_stocks, pp_bonds, pp_gold, pp_cash]
     keys = ['stocks', 'bonds', 'gold', 'cash']
     
-    target_pct = 25.0
     summary_rows = []
-
     for name, mv, key in zip(cat_names, mvs, keys):
         curr_pct = (mv / investable_total_net_worth * 100) if investable_total_net_worth > 0 else 0.0
         target_mv = investable_total_net_worth * 0.25
@@ -460,11 +527,9 @@ if menu == "🍰 共享资金池总览":
 
         summary_rows.append({
             'cat_name': name, 'mv': mv, 'pct': curr_pct,
-            'target_pct': target_pct, 'diff_str': diff_str,
-            'status': status, 'status_color': status_color, 'key': key
+            'diff_str': diff_str, 'status': status, 'status_color': status_color, 'key': key
         })
 
-    # 看板渲染
     st.markdown("##### 📊 投资占比与再平衡决策")
     p_cols = st.columns(4)
     for idx, s in enumerate(summary_rows):
@@ -483,8 +548,7 @@ if menu == "🍰 共享资金池总览":
 
     st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
 
-    # 显示各投资分类持仓
-    st.markdown("##### 📦 组合持仓明细")
+    st.markdown("##### 📦 组合持仓明细与量化智能分析")
     c1, c2, c3, c4 = st.columns(4)
     columns_map = [c1, c2, c3, c4]
     
@@ -505,12 +569,11 @@ if menu == "🍰 共享资金池总览":
                 for r in items:
                     is_profitable = r['profit'] >= 0
                     item_profit_color = "#2a9d8f" if is_profitable else "#e76f51"
-                    card_bg = "#ffffff"
                     card_border = "#2a9d8f" if is_profitable else "#ff758f"
                     item_pct_str = f"+{r['profit_pct']:.2f}%" if is_profitable else f"{r['profit_pct']:.2f}%"
 
                     st.markdown(f"""
-                    <div style="background:{card_bg}; border-radius:10px; padding:10px; border-left:4px solid {card_border}; margin-bottom:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                    <div style="background:#ffffff; border-radius:10px; padding:10px; border-left:4px solid {card_border}; margin-bottom:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
                         <div style="font-size:13px; font-weight:700;">{r['name']} ({r['plat']})</div>
                         <div style="font-size:13px; color:#ff5c8a; font-weight:800; margin-top:2px;">${r['mv']:,.2f}</div>
                         <div style="font-size:11px; color:#777; margin-top:2px;">
@@ -519,6 +582,22 @@ if menu == "🍰 共享资金池总览":
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
+                    
+                    # 🤖 智能买点与止损止盈量化抽屉
+                    if r['symbol']:
+                        with st.expander(f"🤖 智能买点/止损点分析"):
+                            sig = calculate_auto_trading_signals(r['symbol'])
+                            if sig:
+                                st.markdown(f"""
+                                <div style="font-size:11px; color:#444;">
+                                    🎯 <b>建议买点</b>: <b style="color:#2a9d8f;">${sig['good_buy_price']}</b><br>
+                                    🛡️ <b>建议止损</b>: <b style="color:#e76f51;">${sig['stop_loss']}</b><br>
+                                    🎉 <b>建议止盈</b>: <b style="color:#2a9d8f;">${sig['take_profit']}</b><br>
+                                    📊 ATR波动度: ${sig['atr']}
+                                </div>
+                                """, unsafe_allow_html=True)
+                            else:
+                                st.caption("⚠️ 暂未能获取该代码的历史波动数据")
 
     with st.expander("⚙️ 手动更新标的单价 / MMF 净值"):
         if not df_portfolio.empty:
@@ -531,20 +610,30 @@ if menu == "🍰 共享资金池总览":
                 st.success("已更新价格！")
                 st.rerun()
 
-elif menu == "💵 资金存入/取出":
-    st.title("💵 个人资金入池 / 提取")
+elif menu == "💵 资金存入/归桶":
+    st.title("💵 个人资金入池与预分配归桶")
     with st.form("cap_form", clear_on_submit=True):
         f1, f2 = st.columns(2)
         with f1:
             member = st.selectbox("出资人", ["👦 男方", "👧 女方"])
-            type_val = st.selectbox("类型", ["注资/存入本金", "撤资/提取本金"])
-        with f2:
+            type_val = st.selectbox("存取类型", ["注资/存入本金", "撤资/提取本金"])
             date_val = st.date_input("日期", datetime.now())
-            amount = st.number_input("金额 ($)", min_value=1.0, value=1000.0)
-        notes = st.text_input("备注", placeholder="如：3月工资存入")
-        if st.form_submit_button("💗 确认提交", use_container_width=True):
-            save_capital(date_val.strftime("%Y-%m-%d"), member, type_val, amount, notes)
-            st.success("已成功记录并更新资金池份额！")
+        with f2:
+            amount = st.number_input("本次存入/提取总金额 ($)", min_value=1.0, value=1000.0)
+            target_bucket = st.selectbox("归属资金桶/用途", [
+                "📈 投资池现金 (参与再平衡)",
+                "🛡️ 紧急备用金 (MMF)",
+                "✈️ 旅游专项基金",
+                "🚗 车辆维修/Service",
+                "🎉 娱乐与日常消费",
+                "📦 其他专项预留"
+            ])
+            notes = st.text_input("备注", placeholder="如：3月薪水存入，分配给旅游和投资")
+            
+        if st.form_submit_button("💗 确认提交并入桶", use_container_width=True):
+            full_notes = f"[{target_bucket}] {notes}" if notes else f"[{target_bucket}]"
+            save_capital(date_val.strftime("%Y-%m-%d"), member, type_val, amount, full_notes)
+            st.success(f"已成功存入 ${amount:,.2f} 到 【{target_bucket}】！")
             st.rerun()
 
 elif menu == "📈 买卖标的记账":
@@ -553,7 +642,6 @@ elif menu == "📈 买卖标的记账":
     with st.form("tx_form", clear_on_submit=True):
         t1, t2, t3 = st.columns(3)
         with t1:
-            # 💡 这里加入了“🛡️ 紧急备用金 (MMF)”选项
             asset_type = st.selectbox("资产类型", [
                 "股票/ETF", 
                 "债券/国债", 
